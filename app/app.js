@@ -59,6 +59,9 @@ const ICON = {
   trash: svg('<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>'),
   wallet: svg('<rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 13h2M2 10h20"/>'),
   goal: svg('<path d="M4 22V4M4 4h12l-2 4 2 4H4"/>'),
+  lock: svg('<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  logout: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
+  backspace: svg('<path d="M21 5H8l-6 7 6 7h13a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z"/><path d="m16 9-6 6M10 9l6 6"/>'),
   edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
 };
 const BUCKET = {
@@ -336,6 +339,121 @@ function bindPasswordRules(form, getEmail = () => "", getName = () => "", name =
 }
 
 // ---------------------------------------------------------------------------
+// App PIN (quick unlock). The account session stays signed in on this device;
+// the PIN only unlocks the screen. Stored as a salted PBKDF2 hash, never as typed.
+// ---------------------------------------------------------------------------
+const PIN_TRIES = 5;
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
+};
+const pinKey = () => `fd-pin:${user?.id}`;
+const triesKey = () => `fd-pin-tries:${user?.id}`;
+const hasPin = () => !!(user && store.get(pinKey()));
+const lockAfterMs = () => store.get("fd-lock-after") ?? 60000;
+let locked = false, justSignedIn = false, authNotice = "", hiddenAt = 0;
+
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function pinHash(pin, salt, iterations = 150000) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  return b64(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations, hash: "SHA-256" }, key, 256));
+}
+async function savePin(pin) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  store.set(pinKey(), { v: 1, len: pin.length, salt: b64(salt), it: 150000, hash: await pinHash(pin, salt, 150000) });
+  store.del(triesKey());
+}
+async function checkPin(pin) {
+  const rec = store.get(pinKey());
+  return !!rec && (await pinHash(pin, unb64(rec.salt), rec.it)) === rec.hash;
+}
+function pinProblem(pin) {
+  if (!/^\d{4,6}$/.test(pin)) return "Use 4 to 6 digits.";
+  if (/^(\d)\1+$/.test(pin)) return "Don't use the same digit for every number.";
+  if ("0123456789".includes(pin) || "9876543210".includes(pin)) return "Avoid a simple sequence like 1234.";
+  return "";
+}
+function lockNow() { if (hasPin()) { locked = true; render(); } }
+
+function renderLock() {
+  document.querySelectorAll(".toast, .sheet-backdrop").forEach((el) => el.remove());
+  const rec = store.get(pinKey()) || { len: 4 };
+  const name = (user?.user_metadata?.full_name || "").split(" ")[0];
+  let entered = "";
+  $("#root").innerHTML = `<div class="auth-main" style="min-height:100vh"><div class="panel lock-panel" style="width:100%;max-width:360px;display:grid;gap:22px;justify-items:center">
+      ${BRAND}<div style="text-align:center"><h2 style="margin:0 0 4px">Welcome back${name ? ", " + esc(name) : ""}</h2><p class="muted small" style="margin:0">Enter your PIN to unlock</p></div>
+      <div class="pin-dots" aria-live="polite" aria-label="PIN digits entered">${"<span></span>".repeat(rec.len)}</div>
+      <div class="error hidden" style="width:100%;text-align:center" id="pin-err"></div>
+      <div class="pin-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button data-d="${n}">${n}</button>`).join("")}
+        <button data-forgot class="pin-text">Forgot?</button><button data-d="0">0</button><button data-back aria-label="Delete">${ICON.backspace}</button></div>
+      <button class="linkish" data-password>Sign in with password instead</button></div></div>`;
+  const dots = [...document.querySelectorAll(".pin-dots span")];
+  const paint = () => dots.forEach((d, i) => d.classList.toggle("on", i < entered.length));
+  const err = $("#pin-err");
+  const busy = { on: false };
+  const submit = async () => {
+    busy.on = true;
+    if (await checkPin(entered)) { store.del(triesKey()); locked = false; $("#root").innerHTML = ""; busy.on = false; render(); return; }
+    const tries = (store.get(triesKey()) || 0) + 1;
+    store.set(triesKey(), tries);
+    entered = ""; paint(); busy.on = false;
+    document.querySelector(".pin-dots").classList.add("shake"); setTimeout(() => document.querySelector(".pin-dots")?.classList.remove("shake"), 400);
+    if (tries >= PIN_TRIES) return forgetPinAndSignOut("Too many wrong PINs. For your safety, please sign in with your password.");
+    err.textContent = `Wrong PIN. ${PIN_TRIES - tries} ${PIN_TRIES - tries === 1 ? "try" : "tries"} left.`; err.classList.remove("hidden");
+  };
+  const press = (d) => { if (busy.on || entered.length >= rec.len) return; entered += d; paint(); if (entered.length === rec.len) submit(); };
+  const back = () => { entered = entered.slice(0, -1); paint(); };
+  document.querySelectorAll(".pin-pad [data-d]").forEach((b) => b.addEventListener("click", () => press(b.dataset.d)));
+  $(".pin-pad [data-back]").addEventListener("click", back);
+  const forgot = () => forgetPinAndSignOut("Sign in with your password, then set a new PIN.");
+  $(".pin-pad [data-forgot]").addEventListener("click", forgot);
+  $("[data-password]").addEventListener("click", forgot);
+  const onKey = (e) => { if (!locked) return document.removeEventListener("keydown", onKey); if (/^\d$/.test(e.key)) press(e.key); else if (e.key === "Backspace") back(); };
+  document.addEventListener("keydown", onKey);
+}
+
+async function forgetPinAndSignOut(message) {
+  store.del(pinKey()); store.del(triesKey());
+  locked = false; authNotice = message;
+  await api.signOut(false);
+}
+
+function pinSetupSheet(title = "Set an app PIN") {
+  sheet(title, `<p class="small text-2" style="margin:-6px 0 14px">Next time, open FreedomDay with this PIN instead of your password. It's stored securely on this device only.</p>
+    <form class="form" id="f-pin">
+      <div class="split"><label class="field">New PIN<input name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="\\d*" required></label>
+      <label class="field">Confirm PIN<input name="pin2" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="\\d*" required></label></div>
+      <span class="hint small muted">4 to 6 digits</span>
+      <div class="error hidden"></div><button class="btn block">Save PIN</button></form>`, (root, close) => {
+    const form = $("form", root);
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = $(".error", form), pin = form.pin.value.trim();
+      const problem = pinProblem(pin) || (pin !== form.pin2.value.trim() ? "The two PINs don't match." : "");
+      if (problem) { err.textContent = problem; err.classList.remove("hidden"); return; }
+      await savePin(pin); close(); toast("PIN saved. Use it to unlock the app."); render();
+    });
+  });
+}
+
+function accountSheet() {
+  const name = user?.user_metadata?.full_name || "";
+  sheet("Account", `<div class="row" style="justify-content:flex-start;gap:12px;margin:-4px 0 16px"><div class="avatar">${esc(initials())}</div>
+      <div><b>${esc(name || "Your account")}</b><div class="small muted">${esc(user?.email || "")}</div></div></div>
+    <div class="stack">
+      ${hasPin() ? `<button class="btn ghost block" data-act="lock">${ICON.lock} Lock now</button>` : `<button class="btn ghost block" data-act="pin">${ICON.lock} Set an app PIN</button>`}
+      <a class="btn ghost block" href="#/settings" data-act="settings">${ICON.gear} Settings</a>
+      <button class="btn danger block" data-act="out">${ICON.logout} Sign out</button></div>`, (root, close) => {
+    root.querySelector('[data-act="lock"]')?.addEventListener("click", () => { close(); lockNow(); });
+    root.querySelector('[data-act="pin"]')?.addEventListener("click", () => { close(); pinSetupSheet(); });
+    root.querySelector('[data-act="settings"]').addEventListener("click", close);
+    root.querySelector('[data-act="out"]').addEventListener("click", () => { close(); api.signOut(false); });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // login screens
 // ---------------------------------------------------------------------------
 let authMode = "signin";
@@ -344,7 +462,8 @@ const BRAND = `<div class="brand"><div class="logo">${ICON.logo}</div>FreedomDay
 
 function renderAuth() {
   const root = $("#root");
-  const demo = api.demo ? `<div class="demo-banner" style="margin:0">Demo mode: any email and password works, and nothing is saved.</div>` : "";
+  const demo = (api.demo ? `<div class="demo-banner" style="margin:0">Demo mode: any email and password works, and nothing is saved.</div>` : "")
+    + (authNotice ? `<div class="demo-banner" style="margin:0" role="status">${esc(authNotice)}</div>` : "");
   let body;
   if (recovering) {
     body = `<div><h2 style="margin:0 0 4px">Set a new password</h2><p class="muted small" style="margin:0">Other devices will be signed out.</p></div>
@@ -394,6 +513,7 @@ function renderAuth() {
       e.preventDefault(); hideMsgs(fAuth);
       const btn = $("button", fAuth); btn.disabled = true;
       const { name, email, password, confirm } = Object.fromEntries(new FormData(fAuth).entries());
+      justSignedIn = true; authNotice = "";
       try {
         if (authMode === "signup") {
           if (!check().ok) throw new Error("Please choose a stronger password (see the rules above).");
@@ -442,6 +562,7 @@ const initials = () => ((user?.user_metadata?.full_name || user?.email || "?").t
 
 async function render() {
   if (!user || recovering) return renderAuth();
+  if (locked) return renderLock();
   const r = route();
   const views = { home: viewHome, money: viewMoney, dues: viewDues, grow: viewGrow, ai: viewAi, settings: viewSettings };
   const view = views[r] || viewHome;
@@ -451,8 +572,12 @@ async function render() {
       <aside class="sidebar" aria-label="Main">${BRAND}
         ${TABS.map(([k, l]) => `<a class="nav" href="#/${k}" data-tab="${k}">${ICON[k]}<span>${l}</span></a>`).join("")}
         <a class="nav" href="#/settings" data-tab="settings">${ICON.gear}<span>Settings</span></a>
-        <div class="grow"></div><button class="btn add" id="side-add">${ICON.plus} Quick add</button></aside>
-      <div class="content"><header class="topbar"><div class="who"><a class="avatar" href="#/settings" aria-label="Settings">${esc(initials())}</a>
+        <div class="grow"></div><button class="btn add" id="side-add">${ICON.plus} Quick add</button>
+        <div class="side-user"><div class="avatar" style="width:34px;height:34px;font-size:13px">${esc(initials())}</div>
+          <div style="min-width:0;flex:1"><div class="small" style="font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(user?.user_metadata?.full_name || user?.email || "")}</div></div>
+          <button class="icon-btn" id="side-lock" aria-label="Lock now" title="Lock now">${ICON.lock}</button>
+          <button class="icon-btn" id="side-out" aria-label="Sign out" title="Sign out">${ICON.logout}</button></div></aside>
+      <div class="content"><header class="topbar"><div class="who"><button class="avatar" id="acct" aria-label="Account: lock, settings, sign out" style="border:0;cursor:pointer">${esc(initials())}</button>
         <div style="min-width:0"><h1 id="title"></h1><div class="sub" id="subtitle"></div></div></div>
         <a class="icon-btn" href="#/settings" aria-label="Settings">${ICON.gear}</a></header>
       ${api.demo ? `<div class="demo-banner">Demo mode with sample numbers. Nothing is saved.</div>` : ""}
@@ -461,6 +586,9 @@ async function render() {
       <nav class="bottom-nav" aria-label="Main">${TABS.map(([k, l]) => `<a href="#/${k}" data-tab="${k}">${ICON[k]}<span>${l}</span></a>`).join("")}</nav>`;
     $("#fab").addEventListener("click", () => quickAdd());
     $("#side-add").addEventListener("click", () => quickAdd());
+    $("#acct").addEventListener("click", accountSheet);
+    $("#side-out").addEventListener("click", () => api.signOut(false));
+    $("#side-lock").addEventListener("click", () => (hasPin() ? lockNow() : pinSetupSheet()));
   }
   document.querySelectorAll("[data-tab]").forEach((a) => a.classList.toggle("active", a.dataset.tab === r));
   $("#fab").classList.toggle("hidden", r === "ai" || r === "settings");
@@ -1136,6 +1264,13 @@ async function viewSettings(main) {
       <div class="grow"><div class="title">${esc(a.name)}${a.last4 ? ` ••${esc(a.last4)}` : ""}</div><div class="meta">${esc(a.kind.replace("_", " "))}</div></div>${a.kind === "credit_card" ? "" : editBtn("account", a.id, "Edit account")}</div>`).join("")}</div></section>
 
     <section class="card"><div class="card-head"><h2>Security</h2>${tile(ICON.shield, "var(--good-text)")}</div>
+      <div class="item" style="padding-top:0"><div class="grow"><div class="title">App PIN ${hasPin() ? `<span class="chip good">${ICON.check}On</span>` : `<span class="chip warn">Off</span>`}</div>
+        <div class="meta">Unlock with a 4–6 digit PIN instead of your password on this device</div></div></div>
+      <div class="btn-row" style="margin-bottom:10px">${hasPin()
+        ? `<button class="btn ghost small" id="pin-change">${ICON.lock} Change PIN</button><button class="btn ghost small" id="pin-lock">Lock now</button><button class="btn ghost small" id="pin-off">Turn off PIN</button>`
+        : `<button class="btn small" id="pin-set">${ICON.lock} Set PIN</button>`}</div>
+      ${hasPin() ? `<label class="field" style="margin-bottom:12px">Lock the app after leaving it for<select id="lock-after">${[[0, "Immediately"], [60000, "1 minute"], [300000, "5 minutes"], [900000, "15 minutes"]]
+        .map(([v, l]) => `<option value="${v}" ${lockAfterMs() === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
       <div class="btn-row"><button class="btn ghost small" id="chg">Change password</button><button class="btn ghost small" id="out">Sign out</button><button class="btn danger small" id="out-all">Sign out everywhere</button></div>
       <div class="day-head" style="margin-top:6px">Recent activity</div><div class="list">${events.length ? events.map((e) => `<div class="item"><div class="grow"><div class="title">${evLabel[e.event] || e.event}</div>
         <div class="meta">${device(e.device || "")} · ${new Date(e.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</div></div>${e.event === "login_failed" || e.event === "locked" ? `<span class="chip bad">${ICON.alert}Check</span>` : ""}</div>`).join("") : `<div class="empty">No activity yet</div>`}</div></section>
@@ -1183,6 +1318,11 @@ async function viewSettings(main) {
     });
   });
   $("#out", main).addEventListener("click", () => api.signOut(false));
+  $("#pin-set", main)?.addEventListener("click", () => pinSetupSheet());
+  $("#pin-change", main)?.addEventListener("click", () => pinSetupSheet("Change app PIN"));
+  $("#pin-lock", main)?.addEventListener("click", lockNow);
+  $("#pin-off", main)?.addEventListener("click", () => { if (confirm("Turn off the app PIN? You'll stay signed in on this device.")) { store.del(pinKey()); toast("PIN turned off"); render(); } });
+  $("#lock-after", main)?.addEventListener("change", (e) => { store.set("fd-lock-after", Number(e.target.value)); toast("Saved"); });
   $("#out-all", main).addEventListener("click", () => { if (confirm("Sign out on every phone and computer?")) api.signOut(true); });
 }
 
@@ -1192,10 +1332,20 @@ async function viewSettings(main) {
 async function onSignedIn(session) {
   user = session?.user ?? null;
   if (!user) { $("#root").innerHTML = ""; return render(); }
+  const fresh = justSignedIn; justSignedIn = false;
+  locked = hasPin() && !fresh;          // reopening the app with a saved session asks for the PIN
   await api.init(user);
   await refreshCache();
   $("#root").innerHTML = "";
-  render();
+  await render();
+  if (fresh && !hasPin() && !store.get(`fd-pin-offer:${user.id}`)) {
+    store.set(`fd-pin-offer:${user.id}`, 1);
+    setTimeout(() => sheet("Unlock faster with a PIN?", `<p class="text-2" style="margin:-6px 0 16px">Set a 4–6 digit PIN and open FreedomDay without typing your password.</p>
+      <div class="btn-row"><button class="btn" data-yes>${ICON.lock} Set PIN</button><button class="btn ghost" data-no>Not now</button></div>`, (root, close) => {
+      $("[data-yes]", root).addEventListener("click", () => { close(); pinSetupSheet(); });
+      $("[data-no]", root).addEventListener("click", close);
+    }), 400);
+  }
 }
 
 async function start() {
@@ -1207,7 +1357,7 @@ async function start() {
   // (as onSignedIn does) would wait forever. setTimeout runs the work after the lock is released.
   api.onAuth((event, session) => setTimeout(async () => {
     if (event === "PASSWORD_RECOVERY") { recovering = true; user = session?.user ?? null; return renderAuth(); }
-    if (event === "SIGNED_OUT") { user = null; cache = { categories: [], accounts: [] }; $("#root").innerHTML = ""; return renderAuth(); }
+    if (event === "SIGNED_OUT") { user = null; locked = false; cache = { categories: [], accounts: [] }; $("#root").innerHTML = ""; return renderAuth(); }
     if (event === "SIGNED_IN" && (!user || user.id !== session?.user?.id)) {
       try { await onSignedIn(session); } catch (ex) {
         user = null; $("#root").innerHTML = ""; renderAuth();
@@ -1218,7 +1368,12 @@ async function start() {
   }, 0));
   const s = await api.session();
   if (s?.user && !user) await onSignedIn(s); else if (!user) renderAuth();
-  window.addEventListener("hashchange", render);
+  window.addEventListener("hashchange", () => { if (!locked) render(); });
+  // lock again after the app has been in the background for the chosen time
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { hiddenAt = Date.now(); return; }
+    if (user && hasPin() && !locked && hiddenAt && Date.now() - hiddenAt >= lockAfterMs()) { locked = true; document.querySelector(".sheet-backdrop")?.remove(); render(); }
+  });
   if ("serviceWorker" in navigator && !api.demo) navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 
