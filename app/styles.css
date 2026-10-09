@@ -420,3 +420,19 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; }
 .fc-table tbody tr:hover td { background: var(--surface-2); }
 .fc-table tr.mine td { background: var(--accent-soft); }
 .fc-table tr.mine td:first-child { box-shadow: 3px 0 0 var(--accent) inset; }
+
+/* app PIN */
+.pin-dots { display: flex; gap: 14px; justify-content: center; }
+.pin-dots span { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); transition: background .12s ease; }
+.pin-dots span.on { background: var(--text); border-color: var(--text); }
+.pin-dots.shake { animation: shake .35s ease; }
+@keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+.pin-pad { display: grid; grid-template-columns: repeat(3, 76px); gap: 14px; justify-content: center; }
+.pin-pad button { width: 76px; height: 76px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--text);
+  font-size: 26px; font-weight: 650; cursor: pointer; display: grid; place-items: center; }
+.pin-pad button:active { background: var(--surface-3); transform: scale(.96); }
+.pin-pad button svg { width: 24px; height: 24px; }
+.pin-pad .pin-text { font-size: 13px; font-weight: 650; color: var(--accent); background: transparent; border-color: transparent; }
+.side-user { display: flex; align-items: center; gap: 8px; margin: 8px 4px 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.side-user .icon-btn { width: 34px; height: 34px; }
+.side-user .icon-btn svg { width: 17px; height: 17px; }
