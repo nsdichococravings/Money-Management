@@ -83,6 +83,25 @@ SUPABASE_ANON_KEY: "<anon public key>",
 ### 7. Host the `app/` folder
 Any static host works (Cloudflare Pages, Netlify, GitHub Pages). Upload the `app/` folder as the site.
 
+## Android app (APK)
+
+The app is a PWA, so the Android app is a thin, official wrapper (a Trusted Web Activity)
+around the live site. Every update to the site reaches the phone app automatically.
+
+1. Open **https://www.pwabuilder.com**, enter `https://psptzone.netlify.app` and click **Start**.
+2. Click **Package for stores → Android → Generate package**. Keep the defaults
+   (package id like `app.netlify.psptzone.twa`, app name **FreedomDay**), then **Download**.
+3. Unzip it. Copy the **`.apk`** file to your phone, open it and allow "install unknown apps"
+   for your file manager when asked. (The `.aab` file is for the Play Store later.)
+4. Keep the **signing key** file and its passwords from the zip safe: you need the same key
+   for every future update.
+5. To remove the browser address bar inside the app, the zip has an **`assetlinks.json`**.
+   Its contents go in `app/.well-known/assetlinks.json` in this repo (Netlify serves it as
+   JSON already, see `netlify.toml`). Then uninstall and reinstall the app once.
+
+Installing straight from the browser also works: open the site in Chrome on Android,
+then **⋮ → Install app**.
+
 ## How login works
 - Sign up with name, email and password → confirm the email link → sign in.
 - Sign-in goes through `auth-login`: 5 wrong passwords in 15 minutes lock the account for
