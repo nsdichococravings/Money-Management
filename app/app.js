@@ -1,6 +1,6 @@
 // FreedomDay app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
 import { createApi } from "./api.js";
-import { whatIf, monthsUntil } from "./engine.js";
+import { whatIf, monthsUntil, monthlyAverages, estimateFreedom, debtPlan, addMonths, forecast } from "./engine.js";
 import { ring, donut, legend, weekBars, allocBar, installTooltips, countUp } from "./charts.js";
 
 const config = window.FREEDOMDAY_CONFIG || window.WEALTHPILOT_CONFIG || {};
@@ -550,6 +550,99 @@ function dueCard(d) {
 }
 function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay)))); }
 
+// ---------------------------------------------------------------------------
+// Debt-free plan (Dues page card + Home summary)
+// ---------------------------------------------------------------------------
+const loanDebts = (loans) => loans.filter((l) => l.status === "active" && l.outstanding_paise > 0).map((l) => ({
+  id: l.id, name: `${l.lender} · ${l.loan_type} loan`, balance: l.outstanding_paise, rate: (l.interest_rate_bps || 0) / 10000, payment: l.emi_paise }));
+const monthYear = (n) => addMonths(n).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+const yrsMo = (n) => n == null ? "—" : n < 12 ? `${n} month${n === 1 ? "" : "s"}` : `${Math.floor(n / 12)} yr${n >= 24 ? "s" : ""}${n % 12 ? ` ${n % 12} mo` : ""}`;
+// extra money per month for loans: the surplus, plus extra earning (which first covers any gap)
+const debtExtraMonthly = (est, extraPerDayPaise) => Math.max(0, (est && est.income > 0 ? est.surplus : 0) + extraPerDayPaise * 365 / 12);
+
+// Monthly-income steps for the forecast slider: ₹10k steps to ₹10 L, then ₹50k steps to ₹50 L
+const INCOME_STEPS = [...Array.from({ length: 101 }, (_, i) => i * 10000), ...Array.from({ length: 80 }, (_, i) => 1050000 + i * 50000)];
+const nearestStep = (steps, v) => steps.reduce((best, step, i) => (Math.abs(step - v) < Math.abs(steps[best] - v) ? i : best), 0);
+const whenText2 = (m) => (m == null ? "Not reachable" : m === 0 ? "Now" : `${monthYear(m)} · ${yrsMo(m)}`);
+
+function debtPlanCard(loans, est) {
+  const debts = loanDebts(loans);
+  const income0 = Math.max(0, Math.round((est?.income || 0) / 100));
+  return `<section class="card glow" id="debt-plan"><div class="card-head"><h2>Forecast: debt-free and freedom</h2>
+      ${debts.length ? `<div class="tabs" role="tablist"><button class="active" data-strategy="avalanche">Highest interest first</button><button data-strategy="snowball">Smallest loan first</button></div>` : ""}</div>
+    <div class="grid g-2" style="align-items:start">
+      <div class="stack" style="gap:10px">
+        <div class="stack" style="gap:4px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">My monthly income</span>
+          <label class="wi-box">₹<input id="dp-income" type="number" inputmode="numeric" min="0" max="50000000" step="1000" value="${income0}" aria-label="Monthly income">/month</label></div>
+          <input type="range" id="dp-range" min="0" max="${INCOME_STEPS.length - 1}" step="1" value="${nearestStep(INCOME_STEPS, income0)}" aria-label="Monthly income">
+          <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [500000, "₹5L"], [1000000, "₹10L"], [3000000, "₹30L"], [5000000, "₹50L"]].map(([v, l]) =>
+            `<span style="left:${(INCOME_STEPS.indexOf(v) / (INCOME_STEPS.length - 1)) * 100}%">${l}</span>`).join("")}</div>
+          <div class="tiny muted">Today: ${income0 ? rupees(income0 * 100) + "/month (" + esc(est?.basis || "") + ")" : "no income recorded yet"} · costs incl. EMIs ${rupees(est?.costs || 0)}/month</div></div>
+        <div class="split" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="stat"><span class="label">Debt-free by</span><span class="value" id="dp-date">—</span><span class="delta" id="dp-date-sub"></span></div>
+          <div class="stat"><span class="label">Freedom by</span><span class="value" id="dp-free">—</span><span class="delta" id="dp-free-sub"></span></div>
+        </div>
+        <div class="small text-2" id="dp-note"></div></div>
+      <div class="list" id="dp-list">${debts.length ? "" : `<div class="empty">${tile(ICON.check, "var(--good-text)")}No active loans. You're debt-free!</div>`}</div></div>
+    <div style="margin-top:16px;overflow-x:auto"><table class="fc-table" aria-label="Forecast by monthly income"><thead><tr><th>Monthly income</th><th>Per day</th><th>Spare / month</th><th>Debt-free by</th><th>Freedom by</th></tr></thead><tbody id="dp-table"></tbody></table></div>
+  </section>`;
+}
+
+function bindDebtPlan(main, loans, est, freedom) {
+  const card = $("#debt-plan", main);
+  if (!card || !est || !freedom) return;
+  const debts = loanDebts(loans);
+  let strategy = "avalanche";
+  const income0 = Math.max(0, est.income || 0);
+  const run = (income) => forecast({ freedom, debts, income, costs: est.costs, strategy });
+  const base = debtPlan(debts, 0, strategy, { rollover: false });           // EMIs alone, nothing extra
+  const draw = () => {
+    const income = Math.max(0, Number($("#dp-income", card).value) || 0) * 100;
+    const f = run(income), now = run(income0);
+    $("#dp-date", card).textContent = !debts.length ? "Done" : f.debtMonths == null ? "Not yet" : f.debtMonths === 0 ? "Now" : monthYear(f.debtMonths);
+    $("#dp-date-sub", card).innerHTML = !debts.length ? "no loans" : f.debtMonths == null ? "EMIs don't cover the interest"
+      : income !== income0 && now.debtMonths != null && now.debtMonths !== f.debtMonths ? `<b class="${f.debtMonths < now.debtMonths ? "up" : "down"}">${yrsMo(Math.abs(now.debtMonths - f.debtMonths))} ${f.debtMonths < now.debtMonths ? "sooner" : "later"}</b> than today`
+      : `in ${yrsMo(f.debtMonths)}`;
+    $("#dp-free", card).textContent = f.freedomMonths == null ? "Not yet" : f.freedomMonths === 0 ? "Now" : monthYear(f.freedomMonths);
+    $("#dp-free-sub", card).innerHTML = f.freedomMonths == null ? (f.spare + f.emiTotal <= 0 ? "income too low" : "add your living costs")
+      : income !== income0 && now.freedomMonths != null && now.freedomMonths !== f.freedomMonths ? `<b class="${f.freedomMonths < now.freedomMonths ? "up" : "down"}">${yrsMo(Math.abs(now.freedomMonths - f.freedomMonths))} ${f.freedomMonths < now.freedomMonths ? "sooner" : "later"}</b> than today`
+      : `in ${yrsMo(f.freedomMonths)}`;
+    $("#dp-note", card).innerHTML = f.spare < 0
+      ? `<span class="chip warn">${ICON.alert}Short ${rupees(-f.spare)}/month</span> At this income your payments (${rupees(est.costs)}) are more than you earn. ${debts.length ? "Loans close on EMIs alone; earn" : "Earn"} <b class="tnum">${rupees(-f.spare)}</b>/month more (<b class="tnum">${rupees(-f.spare * 12 / 365)}</b>/day) to ${debts.length ? "start paying them off faster" : "start investing"}.`
+      : `Spare <b class="tnum up">${rupees(f.spare)}</b>/month goes to your loans${debts.length ? ` (${strategy === "snowball" ? "smallest first" : "highest interest first"}); when a loan closes its EMI moves to the next one. After the last loan, the spare money plus ${rupees(f.emiTotal)}/month of finished EMIs is invested` : " and investments"}.`;
+    if (debts.length) {
+      const maxM = Math.max(1, ...base.debts.map((d) => d.months || 0), ...f.plan.debts.map((d) => d.months || 0));
+      $("#dp-list", card).innerHTML = f.plan.debts.slice().sort((a, b) => (a.months ?? 1e9) - (b.months ?? 1e9)).map((d, i) => {
+        const b = base.debts.find((x) => x.id === d.id);
+        return `<div class="item" style="display:grid;gap:8px"><div class="row">${tile(ICON.emi, "var(--c-6)")}<div class="grow" style="min-width:0"><div class="title">${i + 1}. ${esc(d.name)}</div>
+            <div class="meta">${compact(d.balance)} left · ${(d.rate * 100).toFixed(2)}% · EMI ${rupees(d.payment)}</div></div>
+            <div class="amt small" style="text-align:right">${d.months == null ? "—" : monthYear(d.months)}<div class="tiny muted">${b?.months != null && d.months != null && b.months > d.months ? `EMIs alone: ${monthYear(b.months)}` : yrsMo(d.months)}</div></div></div>
+          <div class="bar" data-tip="${esc(d.name)}|closes ${d.months == null ? "never" : monthYear(d.months)}${b?.months ? ` · EMIs alone ${monthYear(b.months)}` : ""}"><span style="width:${d.months == null ? 100 : Math.max(2, (d.months / maxM) * 100)}%;background:var(--c-6)"></span></div></div>`;
+      }).join("");
+    }
+    // scenario table: today, break-even, your target, and higher incomes
+    const targetIncome = Math.round(est.targetMonthly || 0);
+    const levels = [["Today", income0], ["Covers all payments", est.costs], ["Your target", targetIncome], ["Today + 25%", income0 * 1.25], ["Today + 50%", income0 * 1.5], ["Target + 25%", targetIncome * 1.25], ["Target × 2", targetIncome * 2]]
+      .map(([l, v]) => [l, Math.ceil(v / 100000) * 100000]).filter(([, v]) => v > 0)
+      .filter(([, v], i, a) => a.findIndex(([, w]) => w === v) === i).sort((a, b) => a[1] - b[1]);
+    $("#dp-table", card).innerHTML = levels.map(([label, v]) => {
+      const r = run(v), mine = Math.abs(v - income) < 50000;
+      return `<tr class="${mine ? "mine" : ""}" tabindex="0" data-income="${v / 100}"><td><b class="tnum">${rupees(v)}</b><div class="tiny muted">${label}</div></td><td class="tnum">${rupees(v * 12 / 365)}</td>
+        <td class="tnum ${r.spare >= 0 ? "up" : "down"}">${r.spare >= 0 ? "" : "−"}${rupees(Math.abs(r.spare))}</td>
+        <td>${debts.length ? (r.debtMonths == null ? "—" : monthYear(r.debtMonths)) : "Done"}</td><td>${r.freedomMonths == null ? "—" : monthYear(r.freedomMonths)}</td></tr>`;
+    }).join("");
+    card.querySelectorAll("#dp-table tr").forEach((tr) => tr.addEventListener("click", () => { $("#dp-income", card).value = tr.dataset.income; sync(); }));
+  };
+  const range = $("#dp-range", card), box = $("#dp-income", card);
+  const sync = () => { range.value = nearestStep(INCOME_STEPS, Number(box.value) || 0); draw(); };
+  range.addEventListener("input", () => { box.value = INCOME_STEPS[Number(range.value)]; draw(); });
+  box.addEventListener("input", sync);
+  card.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click", () => {
+    strategy = b.dataset.strategy; card.querySelectorAll("[data-strategy]").forEach((x) => x.classList.toggle("active", x === b)); draw();
+  }));
+  draw();
+}
+
 // What-if slider steps (₹ per day): fine at the low end, coarse at the top, up to ₹2 lakh
 const WI_STEPS = [
   ...Array.from({ length: 11 }, (_, i) => i * 100),            // 0 – 1,000 by 100
@@ -563,12 +656,29 @@ const WI_STEPS = [
 // Home
 // ---------------------------------------------------------------------------
 async function viewHome(main) {
-  const [h, week, homeBills, homeLoans] = await Promise.all([api.home(), api.week().catch(() => []), api.bills().catch(() => []), api.loans().catch(() => [])]);
+  const [h, week, homeBills, homeLoans, monthRows] = await Promise.all([api.home(), api.week().catch(() => []), api.bills().catch(() => []), api.loans().catch(() => []), api.months().catch(() => [])]);
   h.dues_7d = await api.withBillIds(h.dues_7d).catch(() => h.dues_7d);
   const name = (user.user_metadata?.full_name || "").split(" ")[0];
   const hr = new Date().getHours();
   setTitle(`${hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}${name ? ", " + name : ""}`, h.household?.name || "");
-  const t = h.target, f = h.freedom;
+  const t = h.target, f0 = h.freedom;
+  // No investments yet? Estimate the date from income minus costs instead of showing "—".
+  const est = estimateFreedom(f0, t, monthlyAverages(monthRows));
+  const homeDebts = loanDebts(homeLoans);
+  const fc = est.income > 0 ? forecast({ freedom: f0, debts: homeDebts, income: est.income, costs: est.costs }) : null;
+  const estimated = f0.years == null && fc?.freedomMonths != null;
+  const f = estimated ? { ...f0, years: Math.round(fc.freedomMonths / 1.2) / 10, freedom_date: isoOf(addMonths(fc.freedomMonths)) } : f0;
+  const freedomNote = f0.fi_number_paise <= 0 ? ""
+    : estimated ? `<div class="small text-2" style="margin-top:10px">Estimated from your numbers: income <b class="tnum">${rupees(est.income)}</b>/month − payments <b class="tnum">${rupees(est.costs)}</b>/month = <b class="tnum ${fc.spare >= 0 ? "up" : "down"}">${fc.spare >= 0 ? "" : "−"}${rupees(Math.abs(fc.spare))}</b>/month spare <span class="muted">(${esc(est.basis)})</span>.
+        ${homeDebts.length ? `Spare money first clears your loans (debt-free ${fc.debtMonths ? monthYear(fc.debtMonths) : "now"}), then it and the finished EMIs are invested.` : "It is invested each month."} <a class="linkish" href="#/dues">See forecast</a></div>`
+    : f0.years == null ? (est.income <= 0
+        ? `<div class="small text-2" style="margin-top:10px">Add your income in <a class="linkish" href="#/money">Money</a> and your investments in <a class="linkish" href="#/grow">Goals</a> to see your Freedom date.</div>`
+        : (() => {
+            const need = fc ? Math.max(0, -(fc.spare + fc.emiTotal)) : est.shortfall;   // after loans end, their EMIs are free too
+            return `<div class="small" style="margin-top:10px"><span class="chip warn">${ICON.alert}Not reachable yet</span> Your payments <b class="tnum">${rupees(est.costs)}</b>/month are more than your income <b class="tnum">${rupees(est.income)}</b>/month <span class="muted">(${esc(est.basis)})</span>.
+              Earn <b class="tnum">${rupees(need)}</b>/month more (<b class="tnum">${rupees(need * 12 / 365)}</b>/day) to start investing${homeDebts.length ? ` once your loans end, or <b class="tnum">${rupees(est.shortfall)}</b>/month more to also clear them faster` : ""}. <a class="linkish" href="#/dues">See forecast</a></div>`;
+          })())
+    : fc?.freedomMonths != null && fc.freedomMonths < Math.round(f0.years * 12) ? `<div class="small text-2" style="margin-top:10px">Using your spare money and finished EMIs too would bring it to <b>${monthYear(fc.freedomMonths)}</b>. <a class="linkish" href="#/dues">See forecast</a></div>` : "";
   const empty = !t || t.monthly_paise === 0;
   const weekPct = pct(h.earned_this_week_paise, t.weekly_paise);
   const duesTotal = h.dues_7d.reduce((s, d) => s + d.amount_paise, 0);
@@ -606,13 +716,13 @@ async function viewHome(main) {
       </section>
 
       <section class="card" aria-label="Financial freedom">
-        <div class="card-head"><h2>Financial freedom</h2><span class="chip info">${ICON.clock}${yearsText(f.years)}</span></div>
+        <div class="card-head"><h2>Financial freedom</h2><span class="btn-row" style="flex-wrap:nowrap">${estimated ? `<span class="chip gold">Estimated</span>` : ""}<span class="chip info">${ICON.clock}${yearsText(f.years)}</span></span></div>
         <div class="row" style="justify-content:flex-start;gap:18px">
           ${ring(f.pct, { size: 128, stroke: 12, color: "var(--text-2)", label: "Freedom progress", center: `<b>${f.pct}%</b><span class="tiny muted">funded</span>` })}
           <div class="stack" style="gap:4px"><span class="eyebrow">Freedom date</span>
             <div class="big">${f.freedom_date ? fmtDate(f.freedom_date, { month: "short", year: "numeric" }) : "—"}</div>
             <div class="small text-2 tnum">${compact(f.corpus_paise)} of ${compact(f.fi_number_paise)}</div></div>
-        </div>
+        </div>${freedomNote}
         ${f.fi_number_paise > 0 ? `<div class="stack" style="margin-top:16px;gap:4px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">If I earn and invest more each day</span><label class="wi-box">+₹<input id="wi-num" type="number" inputmode="numeric" min="0" max="1000000" step="100" value="0" aria-label="Extra rupees per day">/day</label></div>
           <input type="range" id="wi" min="0" max="${WI_STEPS.length - 1}" step="1" value="0" aria-label="Extra rupees per day">
           <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [1000, "₹1K"], [10000, "₹10K"], [50000, "₹50K"], [200000, "₹2L"]].map(([v, l]) =>
@@ -628,6 +738,18 @@ async function viewHome(main) {
       <div class="stat"><span class="label">Due in 7 days</span><span class="value tnum">${rupees(duesTotal)}</span><span class="delta">${h.dues_7d.length} payment${h.dues_7d.length === 1 ? "" : "s"}</span></div>
     </div>
 
+    ${(() => {
+      const debts = loanDebts(homeLoans);
+      if (!debts.length) return "";
+      const extra = Math.round(debtExtraMonthly(est, 0));
+      const plan = debtPlan(debts, extra), base = debtPlan(debts, 0, "avalanche", { rollover: false });
+      const sooner = plan.months != null && base.months != null ? base.months - plan.months : 0;
+      return `<section class="card"><div class="row" style="flex-wrap:wrap">
+        <div class="row" style="justify-content:flex-start;gap:14px">${tile(ICON.emi, "var(--c-6)")}<div><span class="eyebrow">Debt-free by</span>
+          <div class="mid">${plan.months == null ? "Not yet" : monthYear(plan.months)}</div>
+          <div class="small text-2">${plan.months == null ? "EMIs don't cover the interest" : sooner > 0 ? `${yrsMo(sooner)} sooner than EMIs alone, ${extra > 0 ? "using your surplus" : "by moving each closed loan's EMI to the next"}` : `${debts.length} loan${debts.length === 1 ? "" : "s"} · paying EMIs`}</div></div></div>
+        <a class="btn small soft" href="#/dues">See debt plan</a></div></section>`;
+    })()}
     <section class="card"><div class="card-head"><h2>Coming up this week</h2><a class="link" href="#/dues">All dues</a></div>
       ${h.dues_7d.length ? `<div class="hscroll">${h.dues_7d.map(dueCard).join("")}</div>` : `<div class="empty">${tile(ICON.check, "var(--good-text)")}Nothing due this week</div>`}</section>
 
@@ -654,11 +776,25 @@ async function viewHome(main) {
       <div class="item"><div class="grow"><div class="title">Needed per month</div><div class="meta">× 12 ÷ 365 = per day · × 7 = per week</div></div><div class="amt tnum">${rupees(t.monthly_paise)}</div></div></div>`);
   });
   const wi = $("#wi", main), wiNum = $("#wi-num", main);
+  const useSurplus = f0.years == null && est.income > 0;   // no investments yet: plan from income − costs
   const showWhatIf = (rupeesPerDay) => {
     const extra = Math.max(0, Math.round(rupeesPerDay)) * 100;
-    const r = whatIf(f, extra);
-    $("#wi-out", main).innerHTML = !extra ? "Move the slider or type an amount to see your new freedom date."
-      : r ? `Investing <b class="tnum">${rupees(extra * 365 / 12)}</b>/month more: freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null && f.years > r.years ? ` · <b class="up">${Math.round((f.years - r.years) * 10) / 10} years sooner</b>` : ""}`
+    const out = $("#wi-out", main);
+    if (!extra) { out.innerHTML = "Move the slider or type an amount to see your new freedom date."; return; }
+    // extra earning first covers any gap between costs and income; the rest is invested
+    const investPerDay = useSurplus ? est.surplus * 12 / 365 + extra : extra;
+    if (useSurplus && est.income > 0) {
+      const g = forecast({ freedom: f0, debts: homeDebts, income: est.income + extra * 365 / 12, costs: est.costs });
+      out.innerHTML = g.freedomMonths == null ? `Not enough yet: earn <b class="tnum">${rupees(-(g.spare + g.emiTotal) * 12 / 365)}</b>/day more to start investing after your loans end.`
+        : `Earning <b class="tnum">${rupees(extra * 365 / 12)}</b>/month more: ${homeDebts.length ? `debt-free <b>${g.debtMonths ? monthYear(g.debtMonths) : "now"}</b>, ` : ""}freedom <b>${monthYear(g.freedomMonths)}</b>${f.years != null && g.freedomMonths < f.years * 12 ? ` · <b class="up">${yrsMo(Math.round(f.years * 12) - g.freedomMonths)} sooner</b>` : ""}`;
+      return;
+    }
+    if (investPerDay <= 0) {
+      out.innerHTML = `That covers part of your gap. Earn <b class="tnum">${rupees(-investPerDay)}</b>/day more to cover your costs and start investing.`;
+      return;
+    }
+    const r = whatIf(f0, investPerDay);
+    out.innerHTML = r ? `Investing <b class="tnum">${rupees(investPerDay * 365 / 12)}</b>/month: freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null && f.years > r.years ? ` · <b class="up">${Math.round((f.years - r.years) * 10) / 10} years sooner</b>` : ""}`
       : "Add investments to see this.";
   };
   wi?.addEventListener("input", () => { const v = WI_STEPS[Number(wi.value)]; wiNum.value = v; showWhatIf(v); });
@@ -736,7 +872,9 @@ async function viewMoney(main) {
 // ---------------------------------------------------------------------------
 async function viewDues(main) {
   setTitle("Dues", "Bills, EMIs and card payments");
-  const [rawDues, bills, loans, cards] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards()]);
+  const [rawDues, bills, loans, cards, duesHome, duesMonths] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards(),
+    api.home().catch(() => null), api.months().catch(() => [])]);
+  const duesEst = duesHome ? { ...estimateFreedom(duesHome.freedom, duesHome.target, monthlyAverages(duesMonths)), targetMonthly: duesHome.target.monthly_paise } : null;
   const dues = await api.withBillIds(rawDues).catch(() => rawDues);
   const late = dues.filter((d) => daysFrom(d.due_date) < 0 || d.status === "overdue");
   const week = dues.filter((d) => !late.includes(d) && daysFrom(d.due_date) <= 7);
@@ -753,6 +891,7 @@ async function viewDues(main) {
       <div class="stat"><span class="label">Next 30 days</span><span class="value tnum">${rupees(sum(dues))}</span><span class="delta">all dues</span></div>
       <div class="stat"><span class="label">Loans left</span><span class="value tnum">${compact(outstanding)}</span><span class="delta">${loans.length} active loan${loans.length === 1 ? "" : "s"}</span></div>
     </div>
+    ${debtPlanCard(loans, duesEst)}
     <section class="card"><div class="card-head"><h2>Upcoming payments</h2>
       <div class="btn-row"><button class="btn small" id="add-bill">+ Bill</button><button class="btn small ghost" id="add-loan">+ Loan / EMI</button>
       <button class="btn small ghost" id="add-card">+ Card</button>${cards.length ? `<button class="btn small soft" id="add-stmt">+ Card bill</button>` : ""}</div></div>
@@ -773,6 +912,7 @@ async function viewDues(main) {
     </div>`;
   bindPay(main);
   bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
+  bindDebtPlan(main, loans, duesEst, duesHome?.freedom);
 
   const nonIncome = cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
   $("#add-bill", main).addEventListener("click", () => formSheet("Add a regular bill", [

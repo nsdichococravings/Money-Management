@@ -82,6 +82,116 @@ export function whatIf(freedom, extraPerDayPaise) {
   return yrs == null ? null : { years: Math.round(yrs * 10) / 10, date: addDays(new Date(), Math.round(yrs * 365.25)) };
 }
 
+// Average income and spending per month from the daily summaries.
+//  * 60+ days of history: average of the complete calendar months (not the first, partial one, nor this one)
+//  * newer: the last 30 days; scaled up to 30 days only when money comes in on 3+ different days
+//    (a daily earner). A salary entered once is never multiplied.
+export function monthlyAverages(rows, today = new Date()) {
+  const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayOf = (r) => new Date(String(r.day).slice(0, 10) + "T00:00:00");
+  const data = rows.filter((r) => (Number(r.income_paise) || 0) || (Number(r.expense_paise) || 0));
+  if (!data.length) return { income: 0, spend: 0, basis: "no income recorded yet", projected: false };
+  const first = data.reduce((m, r) => (dayOf(r) < m ? dayOf(r) : m), dayOf(data[0]));
+  const historyDays = Math.round((t0 - first) / 86400000) + 1;
+  const ym = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+
+  if (historyDays >= 60) {
+    const skip = new Set([ym(first), ym(t0)]);
+    const months = {};
+    data.forEach((r) => { const k = ym(dayOf(r)); if (skip.has(k)) return; (months[k] ??= { i: 0, e: 0 }); months[k].i += +r.income_paise || 0; months[k].e += +r.expense_paise || 0; });
+    const list = Object.values(months).filter((m) => m.i > 0);
+    if (list.length) return { income: list.reduce((s, m) => s + m.i, 0) / list.length, spend: list.reduce((s, m) => s + m.e, 0) / list.length,
+      basis: `${list.length}-month average`, projected: false };
+  }
+  const from = new Date(t0); from.setDate(from.getDate() - 29);
+  const last = data.filter((r) => dayOf(r) >= from);
+  const income = last.reduce((s, r) => s + (+r.income_paise || 0), 0), spend = last.reduce((s, r) => s + (+r.expense_paise || 0), 0);
+  const days = Math.min(historyDays, 30);
+  const incomeDays = last.filter((r) => +r.income_paise > 0).length, spendDays = last.filter((r) => +r.expense_paise > 0).length;
+  const scaleIncome = days < 30 && incomeDays >= 3 ? 30 / days : 1, scaleSpend = days < 30 && spendDays >= 3 ? 30 / days : 1;
+  const projected = scaleIncome > 1 || scaleSpend > 1;
+  return { income: income * scaleIncome, spend: spend * scaleSpend, projected,
+    basis: scaleIncome > 1 ? `your first ${days} days of income, projected to a month`
+      : days < 30 ? `your first ${days} day${days === 1 ? "" : "s"}` : "last 30 days" };
+}
+
+// Freedom date from the family's own numbers: invest whatever is left after costs each month.
+// Costs = the larger of what was actually spent and the planned monthly needs (bills, EMIs, kids, daily, holidays).
+export function estimateFreedom(freedom, target, avgs) {
+  const b = target.breakdown_paise || {};
+  const planned = (b.fixed || 0) + (b.kids || 0) + (b.daily || 0) + (b.sinking || 0);
+  const income = Math.round(avgs.income || 0);
+  const costs = Math.round(Math.max(avgs.spend || 0, planned));
+  const surplus = income - costs;
+  const sip = freedom.freedom_invest_monthly_paise || 0;
+  const base = { income, costs, surplus, basis: avgs.basis, projected: avgs.projected };
+  if (surplus <= 0) return { ...base, ok: false, shortfall: -surplus };
+  const r = freedom.real_return_pct / 100;
+  const yrs = yearsToFreedom(freedom.fi_number_paise, freedom.corpus_paise, (sip + surplus) * 12, r);
+  if (yrs == null) return { ...base, ok: false, shortfall: 0 };
+  return { ...base, ok: true, years: Math.round(yrs * 10) / 10, date: addDays(new Date(), Math.round(yrs * 365.25)),
+    effective: { ...freedom, freedom_invest_monthly_paise: sip + surplus } };
+}
+
+// Debt-free plan. Month by month: every loan accrues interest and pays its EMI; an extra pool
+// (monthly surplus + extra earning + EMIs of loans already closed) goes to one target loan at a time.
+// strategy "avalanche" = highest interest first, "snowball" = smallest balance first.
+// rollover: false gives the plain "just keep paying EMIs" baseline.
+// debts: [{ id, name, balance, rate (yearly, 0.0865), payment (EMI) }]   amounts in paise
+export function debtPlan(debts, extraMonthly = 0, strategy = "avalanche", { rollover = true, maxMonths = 600 } = {}) {
+  const list = debts.filter((d) => d.balance > 0).map((d) => ({ ...d, bal: d.balance, closed: null, interest: 0 }));
+  if (!list.length) return { months: 0, interest: 0, debts: [], reachable: true };
+  const order = () => list.filter((d) => d.bal > 0).sort(strategy === "snowball" ? (a, b) => a.bal - b.bal : (a, b) => b.rate - a.rate || a.bal - b.bal);
+  let month = 0, totalInterest = 0;
+  while (list.some((d) => d.bal > 0) && month < maxMonths) {
+    month++;
+    let pool = Math.max(0, extraMonthly);
+    for (const d of list) {
+      if (d.bal <= 0) { if (rollover) pool += d.payment; continue; }   // a closed loan's EMI rolls into the pool
+      const interest = d.bal * d.rate / 12;
+      d.bal += interest; d.interest += interest; totalInterest += interest;
+      const pay = Math.min(d.bal, d.payment);
+      d.bal -= pay;
+      if (rollover) pool += d.payment - pay;                     // leftover of a final EMI also rolls on
+    }
+    for (const d of order()) {
+      if (pool <= 0) break;
+      const pay = Math.min(d.bal, pool);
+      d.bal -= pay; pool -= pay;
+    }
+    for (const d of list) if (d.bal <= 0.5 && d.closed == null) { d.bal = 0; d.closed = month; }
+  }
+  const reachable = list.every((d) => d.closed != null);
+  return { months: reachable ? Math.max(...list.map((d) => d.closed)) : null, interest: Math.round(totalInterest), reachable,
+    debts: list.map((d) => ({ id: d.id, name: d.name, balance: d.balance, rate: d.rate, payment: d.payment, months: d.closed, interest: Math.round(d.interest) })) };
+}
+// Full forecast for one monthly income.
+// Phase 1: every loan pays its EMI; spare money (income − costs) and closed loans' EMIs go to the loans.
+// Phase 2: once debt-free, spare money + all the EMIs that ended are invested, growing at the real return.
+// costs already include the EMIs. Returns months until debt-free and until financial freedom (null = not reachable).
+export function forecast({ freedom, debts, income, costs, strategy = "avalanche", maxMonths = 1200 }) {
+  const spare = income - costs;
+  const sipWanted = freedom.freedom_invest_monthly_paise || 0;
+  const sip = Math.min(sipWanted, Math.max(0, spare));      // SIPs only continue if the spare money covers them
+  const plan = debtPlan(debts, Math.max(0, spare - sip), strategy);
+  const debtMonths = plan.reachable ? plan.months : null;
+  const emiTotal = debts.filter((d) => d.balance > 0).reduce((s, d) => s + d.payment, 0);
+  const fi = freedom.fi_number_paise;
+  const rm = Math.pow(1 + (freedom.real_return_pct || 0) / 100, 1 / 12) - 1;
+  let corpus = freedom.corpus_paise || 0, freedomMonths = null;
+  if (fi > 0 && corpus >= fi) freedomMonths = 0;
+  else if (fi > 0 && debtMonths != null) {
+    const afterDebt = Math.max(0, spare + emiTotal);       // includes the SIP money
+    for (let m = 1; m <= maxMonths; m++) {
+      corpus = corpus * (1 + rm) + (m > debtMonths ? afterDebt : sip);
+      if (corpus >= fi) { freedomMonths = m; break; }
+    }
+  }
+  return { income, costs, spare, sip, sipWanted, emiTotal, debtMonths, freedomMonths, plan };
+}
+
+export const addMonths = (n, from = new Date()) => { const d = new Date(from.getFullYear(), from.getMonth() + n, 1); return d; };
+
 export function nextDayOfMonth(day, from) {
   const f = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const clamp = (y, m) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
