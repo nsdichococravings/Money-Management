@@ -155,6 +155,14 @@ async function supabaseApi({ SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_VIA_FUNCTION
       if (card.account_id) must(await sb.from("accounts").update({ is_active: false }).eq("id", card.account_id));
     },
     statement: async (id) => must(await sb.from("card_statements").select("*").eq("id", id).single()),
+    // which bill each upcoming bill due belongs to (so the Edit button can open that bill)
+    async withBillIds(dues) {
+      const ids = dues.filter((d) => d.type === "bill").map((d) => d.id);
+      if (!ids.length) return dues;
+      const rows = must(await sb.from("bill_occurrences").select("id,bill_id").in("id", ids));
+      const map = Object.fromEntries(rows.map((r) => [r.id, r.bill_id]));
+      return dues.map((d) => (d.type === "bill" ? { ...d, bill_id: map[d.id] } : d));
+    },
     updateStatement: async (id, f) => must(await sb.from("card_statements").update(f).eq("id", id)),
     deleteStatement: async (id) => must(await sb.from("card_statements").delete().eq("id", id)),
     updateGoal: async (id, f) => must(await sb.from("goals").update(f).eq("id", id)),
@@ -394,6 +402,7 @@ function demoApi() {
     updateCard: async (cId, f) => Object.assign(s.cards.find((x) => x.id === cId), f),
     deleteCard: async (card) => { s.cards = s.cards.filter((x) => x.id !== card.id); s.statements = s.statements.filter((x) => x.card_id !== card.id); },
     statement: async (sId) => s.statements.find((x) => x.id === sId),
+    withBillIds: async (dues) => dues.map((d) => (d.type === "bill" ? { ...d, bill_id: s.occurrences.find((o) => o.id === d.id)?.bill_id } : d)),
     updateStatement: async (sId, f) => Object.assign(s.statements.find((x) => x.id === sId), f),
     deleteStatement: async (sId) => { s.statements = s.statements.filter((x) => x.id !== sId); },
     updateGoal: async (gId, f) => Object.assign(s.goals.find((x) => x.id === gId), f),

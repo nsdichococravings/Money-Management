@@ -210,6 +210,14 @@ const EDITORS = {
       return api.updateStatement(st.id, { total_due_paise: total, min_due_paise: toPaise(v.min), statement_date: v.statement_date, due_date: v.due_date,
         status: paid >= total ? "paid" : paid > 0 ? "partial" : "open" });
     }, { onDelete: () => api.deleteStatement(st.id), deleteLabel: "Delete card bill" });
+    const sheetEl = document.querySelector(".sheet:last-of-type") || document.querySelector(".sheet");
+    sheetEl?.insertAdjacentHTML("beforeend", `<button type="button" class="btn ghost block" data-edit-card style="margin-top:10px">${ICON.card} Edit card details</button>`);
+    sheetEl?.querySelector("[data-edit-card]")?.addEventListener("click", async () => {
+      const card = (await api.cards()).find((c) => c.id === s0.card_id);
+      if (!card) return toast("Card not found");
+      document.querySelector(".sheet-backdrop")?.remove();
+      EDITORS.card(card);
+    });
   },
 
   goal: (g) => formSheet(`Edit ${g.name}`, [
@@ -523,16 +531,22 @@ function statusChip(d) {
   return `<span class="chip info">${ICON.clock}${whenText(d.due_date)}</span>`;
 }
 const payBtn = (d) => `<button class="btn small soft" data-pay='${esc(JSON.stringify(d))}'>Pay</button>`;
+function dueEditBtn(d) {
+  if (d.type === "card") return editBtn("statement", d.id, "Edit card bill");
+  if (d.type === "emi") return editBtn("loan", d.id, "Edit loan");
+  if (d.type === "bill" && d.bill_id) return editBtn("bill", d.bill_id, "Edit bill");
+  return "";
+}
 function dueItem(d) {
   return `<div class="item">${tile(TYPE[d.type].icon, TYPE[d.type].color)}<div class="grow"><div class="title">${esc(d.name)}</div>
     <div class="meta">${statusChip(d)}<span>${fmtDate(d.due_date)}</span>${d.autopay ? "<span>· autopay</span>" : ""}</div></div>
-    <div class="amt tnum">${rupees(d.amount_paise)}</div>${payBtn(d)}${d.type === "card" ? editBtn("statement", d.id, "Edit card bill") : d.type === "emi" ? editBtn("loan", d.id, "Edit loan") : ""}</div>`;
+    <div class="amt tnum">${rupees(d.amount_paise)}</div>${payBtn(d)}${dueEditBtn(d)}</div>`;
 }
 function dueCard(d) {
   const n = daysFrom(d.due_date);
   return `<div class="due-card ${n < 0 || d.status === "overdue" ? "late" : n <= 3 ? "soon" : ""}"><div class="row">${tile(TYPE[d.type].icon, TYPE[d.type].color)}${statusChip(d)}</div>
     <div><div class="title" style="font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.name)}</div><div class="tiny muted">Due ${fmtDate(d.due_date)}</div></div>
-    <div class="row"><span class="mid tnum">${rupees(d.amount_paise)}</span>${payBtn(d)}</div></div>`;
+    <div class="row"><span class="mid tnum">${rupees(d.amount_paise)}</span><span class="btn-row" style="flex-wrap:nowrap">${payBtn(d)}${dueEditBtn(d)}</span></div></div>`;
 }
 function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay)))); }
 
@@ -540,7 +554,8 @@ function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.ad
 // Home
 // ---------------------------------------------------------------------------
 async function viewHome(main) {
-  const [h, week] = await Promise.all([api.home(), api.week().catch(() => [])]);
+  const [h, week, homeBills, homeLoans] = await Promise.all([api.home(), api.week().catch(() => []), api.bills().catch(() => []), api.loans().catch(() => [])]);
+  h.dues_7d = await api.withBillIds(h.dues_7d).catch(() => h.dues_7d);
   const name = (user.user_metadata?.full_name || "").split(" ")[0];
   const hr = new Date().getHours();
   setTitle(`${hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}${name ? ", " + name : ""}`, h.household?.name || "");
@@ -619,6 +634,7 @@ async function viewHome(main) {
     </div>`;
 
   countUp($("#hero-day", main), t.daily_paise, rupees);
+  bindEdit(main, { bill: homeBills, loan: homeLoans, statement: h.dues_7d.filter((d) => d.type === "card") });
   bindPay(main);
   $("#why", main).addEventListener("click", () => {
     sheet("How your number is worked out", `<div class="list">${["fixed", "kids", "daily", "sinking", "invest"].map((k) => `<div class="item">${tile(ICON[k], BUCKET[k].color)}<div class="grow"><div class="title">${BUCKET[k].label}</div>
@@ -703,7 +719,8 @@ async function viewMoney(main) {
 // ---------------------------------------------------------------------------
 async function viewDues(main) {
   setTitle("Dues", "Bills, EMIs and card payments");
-  const [dues, bills, loans, cards] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards()]);
+  const [rawDues, bills, loans, cards] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards()]);
+  const dues = await api.withBillIds(rawDues).catch(() => rawDues);
   const late = dues.filter((d) => daysFrom(d.due_date) < 0 || d.status === "overdue");
   const week = dues.filter((d) => !late.includes(d) && daysFrom(d.due_date) <= 7);
   const later = dues.filter((d) => !late.includes(d) && daysFrom(d.due_date) > 7);
