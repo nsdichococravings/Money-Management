@@ -1,6 +1,6 @@
-# WealthPilot: AI Personal Finance Assistant (Architecture and Design)
+# FreedomDay: AI Personal Finance Assistant (Architecture and Design)
 
-> Status: design proposal v1 (2026-10-09). Working name: **WealthPilot**, rename freely.
+> Status: design proposal v1 (2026-10-09). Name: **FreedomDay** · Tagline: *Earn today. Free tomorrow.*
 > Companion files: [`README.md`](../README.md) (setup), [`app/`](../app) (the app), [`supabase/`](../supabase) (SQL migrations, functions),
 > [`EARNING-TARGET.md`](./EARNING-TARGET.md) (the "how much must I earn daily/weekly" engine).
 

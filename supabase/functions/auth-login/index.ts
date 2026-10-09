@@ -1,4 +1,4 @@
-// auth-login: password sign-in with lockout, for the WealthPilot app.
+// auth-login: password sign-in with lockout, for the FreedomDay app.
 //
 // The app sends { email, password } here instead of calling Supabase Auth
 // directly, so every attempt is checked and recorded:

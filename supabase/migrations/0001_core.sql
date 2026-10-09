@@ -1,4 +1,4 @@
--- WealthPilot migration 0001: schema, plans, people, households, subscriptions
+-- FreedomDay migration 0001: schema, plans, people, households, subscriptions
 -- Money is stored as bigint PAISE (₹1 = 100) everywhere: exact maths, no rounding.
 -- Every family's data carries household_id; Row Level Security is switched on in 0006.
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.

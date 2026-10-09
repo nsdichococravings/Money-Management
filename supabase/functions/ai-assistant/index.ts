@@ -1,4 +1,4 @@
-// ai-assistant: the WealthPilot AI (Ask AI chat + "Find savings" cost cutter).
+// ai-assistant: the FreedomDay AI (Ask AI chat + "Find savings" cost cutter).
 //
 // The app calls it with the user's normal sign-in token:
 //   { mode: "chat", question, history?: [{role, content}] }  -> { answer }
@@ -36,7 +36,7 @@ const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY
 const admin = createClient(URL, SERVICE, { db: { schema: "fin" }, auth: { persistSession: false } });
 
 // Stable text first so it can be cached; the family's numbers go in the user turn.
-const SYSTEM = `You are WealthPilot, a friendly personal finance assistant for Indian families.
+const SYSTEM = `You are FreedomDay, a friendly personal finance assistant for Indian families.
 You receive a JSON snapshot of the family's finances computed by the app's own engine.
 All amounts in the snapshot are in PAISE (divide by 100 for rupees). Always talk in rupees with Indian digit grouping, e.g. ₹1,25,000.
 

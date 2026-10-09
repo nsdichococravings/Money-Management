@@ -1,4 +1,4 @@
--- WealthPilot migration 0008: the money engine and the functions the screens call
+-- FreedomDay migration 0008: the money engine and the functions the screens call
 --  * compute_earning_target  how much to earn per day / week / month (EARNING-TARGET.md)
 --  * compute_freedom         FI number, Freedom %, Freedom Date
 --  * get_home / get_dues     one call per screen

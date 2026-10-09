@@ -1,4 +1,4 @@
--- WealthPilot migration 0003: bills, loans / EMIs, credit cards
+-- FreedomDay migration 0003: bills, loans / EMIs, credit cards
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.
 begin;
 set local lock_timeout = '10s';

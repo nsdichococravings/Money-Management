@@ -1,9 +1,9 @@
-// WealthPilot app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
+// FreedomDay app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
 import { createApi } from "./api.js";
 import { whatIf, monthsUntil } from "./engine.js";
 import { ring, donut, legend, weekBars, allocBar, installTooltips, countUp } from "./charts.js";
 
-const config = window.WEALTHPILOT_CONFIG || {};
+const config = window.FREEDOMDAY_CONFIG || window.WEALTHPILOT_CONFIG || {};
 let api;
 let user = null;
 let cache = { categories: [], accounts: [] };
@@ -39,7 +39,7 @@ const ICON = {
   ai: svg('<path d="M12 3l1.9 4.7L18.5 9.5l-4.6 1.8L12 16l-1.9-4.7L5.5 9.5l4.6-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>'),
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   plus: svg('<path d="M12 5v14M5 12h14"/>', 'stroke-width="2.4"'),
-  logo: svg('<path d="M6 5h12M6 10h12M10 5c4.5 0 6 2 6 5s-1.5 5-6 5H7l8 5"/>', 'stroke-width="2.4"'),
+  logo: svg('<path d="M8 20V4h10M8 12h7"/>', 'stroke-width="2.8"'),
   income: svg('<path d="M17 7 7 17M7 8v9h9"/>'),
   fixed: svg('<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-6h6v6"/>'),
   kids: svg('<path d="M22 10 12 5 2 10l10 5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>'),
@@ -194,7 +194,7 @@ function bindPasswordRules(form, getEmail = () => "", getName = () => "", name =
 // ---------------------------------------------------------------------------
 let authMode = "signin";
 let recovering = false;
-const BRAND = `<div class="brand"><div class="logo">${ICON.logo}</div>WealthPilot</div>`;
+const BRAND = `<div class="brand"><div class="logo">${ICON.logo}</div>FreedomDay</div>`;
 
 function renderAuth() {
   const root = $("#root");
@@ -227,15 +227,15 @@ function renderAuth() {
   }
   const feature = (icon, color, title, text) => `<div class="feature">${tile(icon, color)}<div><b>${title}</b><div class="small text-2">${text}</div></div></div>`;
   root.innerHTML = `<div class="auth">
-    <aside class="auth-art">${BRAND}
+    <aside class="auth-art"><div class="stack" style="gap:6px">${BRAND}<span class="eyebrow">Earn today. Free tomorrow.</span></div>
       <div><h2>Know exactly what you need to earn <span class="grad-text">every day.</span></h2>
         <p>EMIs, card bills, school fees, holidays and SIPs, turned into one daily number, with AI that finds money you're wasting.</p></div>
       <div class="features">${feature(ICON.dues, "var(--c-1)", "Never miss a due date", "EMIs, credit cards and bills in one calendar")}
         ${feature(ICON.invest, "var(--c-5)", "Your Freedom Date", "See when your investments can pay for your life")}
         ${feature(ICON.ai, "var(--c-6)", "AI cost cutter", "Spots unused subscriptions, fees and interest")}</div>
     </aside>
-    <div class="auth-main"><div class="panel"><div class="auth-mobile-brand">${BRAND}</div>${demo}<div class="card glow stack" style="gap:18px;padding:22px">${body}</div>
-      <p class="tiny muted" style="text-align:center;margin:0">${ICON.shield.replace("<svg", '<svg width="14" height="14" style="vertical-align:-2px"')} Your password is never stored by WealthPilot. Only a secure hash is kept by our sign-in service.</p></div></div></div>`;
+    <div class="auth-main"><div class="panel"><div class="auth-mobile-brand stack" style="gap:6px">${BRAND}<span class="eyebrow">Earn today. Free tomorrow.</span></div>${demo}<div class="card glow stack" style="gap:18px;padding:22px">${body}</div>
+      <p class="tiny muted" style="text-align:center;margin:0">${ICON.shield.replace("<svg", '<svg width="14" height="14" style="vertical-align:-2px"')} Your password is never stored by FreedomDay. Only a secure hash is kept by our sign-in service.</p></div></div></div>`;
 
   root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { authMode = b.dataset.mode; renderAuth(); }));
   const show = (form, cls, msg) => { const el = $(`.${cls}`, form); el.textContent = msg; el.classList.remove("hidden"); };
@@ -331,7 +331,7 @@ async function render() {
 const skeleton = () => `<div class="grid g-hero"><div class="skel" style="height:230px"></div><div class="skel" style="height:230px"></div></div>
   <div class="stats">${'<div class="skel" style="height:78px"></div>'.repeat(4)}</div><div class="skel" style="height:180px"></div>`;
 
-function setTitle(t, sub = "") { $("#title").textContent = t; $("#subtitle").textContent = sub; document.title = `${t} · WealthPilot`; }
+function setTitle(t, sub = "") { $("#title").textContent = t; $("#subtitle").textContent = sub; document.title = `${t} · FreedomDay`; }
 
 async function refreshCache() {
   [cache.categories, cache.accounts] = await Promise.all([api.categories(), api.accounts()]);
@@ -422,7 +422,7 @@ async function viewHome(main) {
   const buffer = t.monthly_paise - Object.values({ f: b.fixed, k: b.kids, d: b.daily, s: b.sinking, i: b.invest }).reduce((s, v) => s + (v || 0), 0);
 
   const onboarding = empty ? `<section class="card glow"><div class="card-head"><h2>Let's find your number</h2><span class="chip gold">3 steps · 5 min</span></div>
-      <p class="text-2 small" style="margin:0 0 14px">Add what you pay every month. WealthPilot turns it into how much you need to earn each day and week.</p>
+      <p class="text-2 small" style="margin:0 0 14px">Add what you pay every month. FreedomDay turns it into how much you need to earn each day and week.</p>
       <div class="grid g-3">
         <a class="due-card" href="#/dues" style="text-decoration:none">${tile(ICON.emi, "var(--c-1)")}<b>1. EMIs, cards & bills</b><span class="tiny muted">Loans, credit cards, rent, school fees</span></a>
         <a class="due-card" href="#/settings" style="text-decoration:none">${tile(ICON.daily, "var(--c-3)")}<b>2. Daily spend</b><span class="tiny muted">Groceries, milk, fuel, medicine</span></a>

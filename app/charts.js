@@ -1,4 +1,4 @@
-// Small SVG chart kit for WealthPilot. No libraries.
+// Small SVG chart kit for FreedomDay. No libraries.
 // Rules (dataviz method): thin marks, 4px rounded data-ends, 2px surface gaps,
 // hairline grid, legend whenever there are 2+ series, values printed beside
 // colours (never colour alone), tooltip on every mark via [data-tip].

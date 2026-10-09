@@ -1,4 +1,4 @@
--- WealthPilot migration 0005: pre-aggregated summary tables kept by trigger
+-- FreedomDay migration 0005: pre-aggregated summary tables kept by trigger
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.
 begin;
 set local lock_timeout = '10s';
