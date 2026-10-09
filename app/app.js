@@ -550,6 +550,15 @@ function dueCard(d) {
 }
 function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay)))); }
 
+// What-if slider steps (₹ per day): fine at the low end, coarse at the top, up to ₹2 lakh
+const WI_STEPS = [
+  ...Array.from({ length: 11 }, (_, i) => i * 100),            // 0 – 1,000 by 100
+  ...Array.from({ length: 8 }, (_, i) => 1500 + i * 500),      // 1,500 – 5,000 by 500
+  ...Array.from({ length: 15 }, (_, i) => 6000 + i * 1000),    // 6,000 – 20,000 by 1,000
+  ...Array.from({ length: 16 }, (_, i) => 25000 + i * 5000),   // 25,000 – 1,00,000 by 5,000
+  ...Array.from({ length: 10 }, (_, i) => 110000 + i * 10000), // 1,10,000 – 2,00,000 by 10,000
+];
+
 // ---------------------------------------------------------------------------
 // Home
 // ---------------------------------------------------------------------------
@@ -604,8 +613,10 @@ async function viewHome(main) {
             <div class="big">${f.freedom_date ? fmtDate(f.freedom_date, { month: "short", year: "numeric" }) : "—"}</div>
             <div class="small text-2 tnum">${compact(f.corpus_paise)} of ${compact(f.fi_number_paise)}</div></div>
         </div>
-        ${f.fi_number_paise > 0 ? `<div class="stack" style="margin-top:16px;gap:4px"><div class="row small"><span class="text-2">If I earn and invest more each day</span><b id="wi-amt">+₹0/day</b></div>
-          <input type="range" id="wi" min="0" max="3000" step="100" value="0" aria-label="Extra rupees per day">
+        ${f.fi_number_paise > 0 ? `<div class="stack" style="margin-top:16px;gap:4px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">If I earn and invest more each day</span><label class="wi-box">+₹<input id="wi-num" type="number" inputmode="numeric" min="0" max="1000000" step="100" value="0" aria-label="Extra rupees per day">/day</label></div>
+          <input type="range" id="wi" min="0" max="${WI_STEPS.length - 1}" step="1" value="0" aria-label="Extra rupees per day">
+          <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [1000, "₹1K"], [10000, "₹10K"], [50000, "₹50K"], [200000, "₹2L"]].map(([v, l]) =>
+            `<span style="left:${(WI_STEPS.indexOf(v) / (WI_STEPS.length - 1)) * 100}%">${l}</span>`).join("")}</div>
           <div class="small text-2" id="wi-out">Move the slider to see your new freedom date.</div></div>` : `<p class="small muted">Add your monthly costs and investments to see your Freedom Date.</p>`}
       </section>
     </div>
@@ -642,13 +653,19 @@ async function viewHome(main) {
       <div class="item">${tile(ICON.shield, "var(--muted)")}<div class="grow"><div class="title">Safety buffer ${t.buffer_pct}%</div></div><div class="amt tnum">${rupees(buffer)}</div></div>
       <div class="item"><div class="grow"><div class="title">Needed per month</div><div class="meta">× 12 ÷ 365 = per day · × 7 = per week</div></div><div class="amt tnum">${rupees(t.monthly_paise)}</div></div></div>`);
   });
-  const wi = $("#wi", main);
-  wi?.addEventListener("input", () => {
-    const extra = Number(wi.value) * 100;
-    $("#wi-amt", main).textContent = `+₹${Number(wi.value).toLocaleString("en-IN")}/day`;
+  const wi = $("#wi", main), wiNum = $("#wi-num", main);
+  const showWhatIf = (rupeesPerDay) => {
+    const extra = Math.max(0, Math.round(rupeesPerDay)) * 100;
     const r = whatIf(f, extra);
-    $("#wi-out", main).innerHTML = !extra ? "Move the slider to see your new freedom date."
-      : r ? `Freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null ? ` · <b class="up">${Math.max(0, Math.round((f.years - r.years) * 10) / 10)} years sooner</b>` : ""}` : "Add investments to see this.";
+    $("#wi-out", main).innerHTML = !extra ? "Move the slider or type an amount to see your new freedom date."
+      : r ? `Investing <b class="tnum">${rupees(extra * 365 / 12)}</b>/month more: freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null && f.years > r.years ? ` · <b class="up">${Math.round((f.years - r.years) * 10) / 10} years sooner</b>` : ""}`
+      : "Add investments to see this.";
+  };
+  wi?.addEventListener("input", () => { const v = WI_STEPS[Number(wi.value)]; wiNum.value = v; showWhatIf(v); });
+  wiNum?.addEventListener("input", () => {
+    const v = Math.min(Math.max(Number(wiNum.value) || 0, 0), 1000000);
+    wi.value = WI_STEPS.reduce((best, step, i) => (Math.abs(step - v) < Math.abs(WI_STEPS[best] - v) ? i : best), 0);
+    showWhatIf(v);
   });
   main.querySelectorAll("[data-ins]").forEach((el) => el.addEventListener("click", async () => { await api.setInsight(el.dataset.ins, el.dataset.st); render(); }));
 }

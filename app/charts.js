@@ -12,8 +12,8 @@ export function ring(pct, { size = 160, stroke = 12, color = "var(--c-1)", label
   return `<div class="ring-wrap" style="width:${size}px;max-width:100%" role="img" aria-label="${esc(label)} ${p}%">
     <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-opacity=".16" stroke-width="${stroke}"/>
-      <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
-        stroke-dasharray="${dash} ${c}" transform="rotate(-90 ${size / 2} ${size / 2})" class="ring-fill" style="--len:${c}"/>
+      ${p > 0 ? `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
+        stroke-dasharray="${dash} ${c}" transform="rotate(-90 ${size / 2} ${size / 2})" class="ring-fill" style="--len:${c}"/>` : ""}
     </svg><div class="center">${center}</div></div>`;
 }
 

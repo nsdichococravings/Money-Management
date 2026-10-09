@@ -290,6 +290,15 @@ label.field { display: grid; gap: 7px; font-size: 13px; font-weight: 650; color:
 .rules li.met::before { content: "✓  "; }
 
 input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; }
+.wi-box { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; font-weight: 750; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 2px 8px; }
+.wi-box input { width: 92px; min-width: 0; border: 0; background: transparent; font-weight: 750; text-align: right; padding: 4px 2px; -moz-appearance: textfield; }
+.wi-box input::-webkit-outer-spin-button, .wi-box input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.wi-box input:focus { outline: none; }
+.wi-ticks { position: relative; height: 16px; margin: 0 9px; }
+.wi-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.wi-ticks span:first-child { transform: none; margin-left: -9px; }
+.wi-ticks span:last-child { transform: translateX(-100%); margin-left: 9px; }
+.wi-box:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* ---------------------------------------------------------------- login */
 .auth { min-height: 100vh; display: grid; grid-template-columns: 1fr; }
