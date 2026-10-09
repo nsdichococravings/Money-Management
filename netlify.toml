@@ -1,4 +1,4 @@
-# Netlify settings for WealthPilot. The app is plain files in app/ (no build step).
+# Netlify settings for FreedomDay. The app is plain files in app/ (no build step).
 [build]
   publish = "app"
   command = ""

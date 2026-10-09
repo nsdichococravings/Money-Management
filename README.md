@@ -1,4 +1,6 @@
-# WealthPilot: AI personal finance assistant
+# FreedomDay: AI personal finance assistant
+
+*Earn today. Free tomorrow.*
 
 Know how much you must earn **per day and per week** to cover EMIs, card bills, kids' school,
 holidays, daily needs and investments, never miss a due date, and see your **Freedom Date**.
@@ -87,7 +89,7 @@ Any static host works (Cloudflare Pages, Netlify, GitHub Pages). Upload the `app
   15 minutes, every attempt is recorded in `fin.login_events`, and the message never reveals
   whether an email has an account.
 - Forgot password → email link → set a new password. Change password asks for the current one.
-- Passwords are never stored by WealthPilot; Supabase Auth keeps only a bcrypt hash.
+- Passwords are never stored by FreedomDay; Supabase Auth keeps only a bcrypt hash.
 
 ## Testing the database locally
 On a local Postgres 15+ (not Supabase):

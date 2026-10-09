@@ -1,4 +1,4 @@
--- WealthPilot migration 0009: subscription plans and the default categories
+-- FreedomDay migration 0009: subscription plans and the default categories
 -- Change prices and limits here any time; the app reads them from the plans table.
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.
 begin;

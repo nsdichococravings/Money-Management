@@ -1,4 +1,4 @@
--- WealthPilot migration 0007: permissions, Row Level Security, account setup
+-- FreedomDay migration 0007: permissions, Row Level Security, account setup
 -- Each family (household) can only see and change its own data.
 -- Users can never change their plan, platform role, or the summary tables directly.
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.

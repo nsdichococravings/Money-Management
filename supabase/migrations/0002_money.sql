@@ -1,4 +1,4 @@
--- WealthPilot migration 0002: accounts, categories, transactions (partitioned by month)
+-- FreedomDay migration 0002: accounts, categories, transactions (partitioned by month)
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.
 begin;
 set local lock_timeout = '10s';

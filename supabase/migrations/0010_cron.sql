@@ -1,6 +1,8 @@
--- WealthPilot migration 0010 (optional): nightly jobs
+-- FreedomDay migration 0010 (optional): nightly jobs
 -- Needs the pg_cron extension: Supabase > Database > Extensions > enable "pg_cron", then run this.
 -- Times are UTC (00:15 UTC = 05:45 IST). Safe to re-run.
+-- The job names keep the original 'wealthpilot-' prefix on purpose: renaming them
+-- would schedule duplicate jobs in databases that already ran this file.
 
 -- Create next months' transaction partitions ahead of time (25th of every month)
 select cron.schedule('wealthpilot-partitions', '0 2 25 * *',

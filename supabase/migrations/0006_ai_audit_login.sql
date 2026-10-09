@@ -1,4 +1,4 @@
--- WealthPilot migration 0006: AI runs and insights, notifications, audit log, login history
+-- FreedomDay migration 0006: AI runs and insights, notifications, audit log, login history
 -- Passwords are NEVER stored in these tables. Supabase Auth keeps only a bcrypt hash.
 -- Run the files in number order (Supabase > SQL Editor > paste > Run). Safe to re-run.
 begin;
