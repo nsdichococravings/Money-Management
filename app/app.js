@@ -59,6 +59,7 @@ const ICON = {
   trash: svg('<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>'),
   wallet: svg('<rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 13h2M2 10h20"/>'),
   goal: svg('<path d="M4 22V4M4 4h12l-2 4 2 4H4"/>'),
+  edit: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'),
 };
 const BUCKET = {
   fixed: { label: "Bills & EMIs", color: "var(--c-1)" },
@@ -112,9 +113,18 @@ function formHtml(fields, submitLabel) {
     <div class="error hidden"></div><button class="btn block" type="submit">${esc(submitLabel)}</button></form>`;
 }
 
-function formSheet(title, fields, submitLabel, onSubmit) {
-  sheet(title, formHtml(fields, submitLabel), (root, close) => {
+// opts.onDelete adds a Delete button (asks first). opts.deleteText is the question.
+function formSheet(title, fields, submitLabel, onSubmit, opts = {}) {
+  const del = opts.onDelete ? `<button type="button" class="btn danger block" data-delete style="margin-top:10px">${ICON.trash} ${esc(opts.deleteLabel || "Delete")}</button>` : "";
+  sheet(title, formHtml(fields, submitLabel) + del, (root, close) => {
     const form = $("form", root);
+    $("[data-delete]", root)?.addEventListener("click", async (e) => {
+      if (!confirm(opts.deleteText || "Delete this? This cannot be undone.")) return;
+      const err = $(".error", form);
+      e.currentTarget.disabled = true;
+      try { await opts.onDelete(); close(); toast(opts.deletedToast || "Deleted"); render(); }
+      catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); e.currentTarget.disabled = false; }
+    });
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = $("button[type=submit]", form), err = $(".error", form);
@@ -129,6 +139,134 @@ function formSheet(title, fields, submitLabel, onSubmit) {
       } finally { btn.disabled = false; }
     });
   });
+}
+
+const editBtn = (kind, id, label = "Edit") => `<button class="icon-btn" style="width:34px;height:34px" aria-label="${esc(label)}" data-edit="${kind}" data-id="${esc(id)}">${ICON.edit.replace("<svg", '<svg width="16" height="16"')}</button>`;
+const rupeesIn = (paise) => (paise ? Math.round(paise) / 100 : "");
+const FREQ = { weekly: "Weekly", monthly: "Monthly", quarterly: "Every 3 months", half_yearly: "Every 6 months", yearly: "Yearly" };
+const LOAN_TYPES = [["home", "Home"], ["car", "Car"], ["personal", "Personal"], ["education", "Education"], ["gold", "Gold"], ["business", "Business"], ["other", "Other"]];
+const GOAL_KINDS = [["education", "Kids' education"], ["holiday", "Holiday"], ["emergency", "Emergency fund"], ["festival", "Festival / wedding"], ["purchase", "Big purchase"], ["debt_free", "Become debt-free"], ["financial_freedom", "Financial freedom"], ["other", "Other"]];
+const ASSET_TYPES = [["equity_mf", "Equity mutual fund"], ["debt_mf", "Debt mutual fund"], ["stock", "Stocks"], ["fd", "Fixed deposit"], ["rd", "Recurring deposit"], ["ppf", "PPF"], ["epf", "EPF"], ["nps", "NPS"], ["gold", "Gold"], ["real_estate", "Real estate"], ["other", "Other"]];
+const spendCategoryOptions = () => cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, c.name]);
+const dayOk = (v, label) => { const n = Number(v); if (!(n >= 1 && n <= 31)) throw new Error(`${label} must be between 1 and 31.`); return n; };
+const moneyOk = (v, label) => { const p = toPaise(v); if (p <= 0) throw new Error(`Enter ${label} more than zero.`); return p; };
+
+const EDITORS = {
+  loan: (l) => formSheet(`Edit ${l.lender} loan`, [
+    [{ name: "loan_type", label: "Type", type: "select", options: LOAN_TYPES, value: l.loan_type },
+     { name: "lender", label: "Bank / lender", required: true, value: l.lender }],
+    [{ name: "emi", label: "EMI amount", type: "money", required: true, value: rupeesIn(l.emi_paise) },
+     { name: "emi_day", label: "EMI day of month", type: "number", min: 1, max: 31, required: true, value: l.emi_day }],
+    [{ name: "principal", label: "Original loan", type: "money", required: true, value: rupeesIn(l.principal_paise) },
+     { name: "outstanding", label: "Still to pay", type: "money", required: true, value: rupeesIn(l.outstanding_paise) }],
+    [{ name: "rate", label: "Interest % / year", type: "number", step: "0.01", required: true, value: (l.interest_rate_bps / 100).toFixed(2) },
+     { name: "tenure", label: "Tenure (months)", type: "number", min: 1, required: true, value: l.tenure_months }],
+    [{ name: "start_date", label: "Loan start date", type: "date", required: true, value: l.start_date },
+     { name: "status", label: "Status", type: "select", options: [["active", "Active"], ["closed", "Closed / fully paid"]], value: l.status }],
+  ], "Save changes", (v) => api.updateLoan(l.id, {
+    loan_type: v.loan_type, lender: v.lender.trim(), emi_paise: moneyOk(v.emi, "the EMI"), emi_day: dayOk(v.emi_day, "EMI day"),
+    principal_paise: moneyOk(v.principal, "the loan amount"), outstanding_paise: Math.max(toPaise(v.outstanding), 0),
+    interest_rate_bps: Math.round(Number(v.rate) * 100), tenure_months: Number(v.tenure), start_date: v.start_date, status: v.status,
+  }), { onDelete: () => api.deleteLoan(l.id), deleteLabel: "Delete loan", deleteText: `Delete the ${l.lender} loan? Past EMI payments stay in your transactions.` }),
+
+  async bill(b) {
+    const next = await api.billNextOpen(b);
+    formSheet(`Edit ${b.name}`, [
+      { name: "name", label: "Name", required: true, value: b.name },
+      [{ name: "amount", label: "Amount", type: "money", required: true, value: rupeesIn(b.amount_paise) },
+       { name: "frequency", label: "How often", type: "select", value: b.frequency, options: Object.entries(FREQ) }],
+      { name: "category_id", label: "Category", type: "select", options: spendCategoryOptions(), value: b.category_id },
+      [{ name: "next_due_date", label: "Next due date", type: "date", required: true, value: next },
+       { name: "autopay", label: "Autopay?", type: "select", options: [["false", "No"], ["true", "Yes"]], value: String(!!b.autopay) }],
+    ], "Save changes", (v) => api.updateBill(b.id, {
+      name: v.name.trim(), amount_paise: moneyOk(v.amount, "an amount"), frequency: v.frequency, category_id: Number(v.category_id),
+      next_due_date: v.next_due_date, due_day: new Date(v.next_due_date).getDate(), autopay: v.autopay === "true",
+    }), { onDelete: () => api.deleteBill(b.id), deleteLabel: "Delete bill", deleteText: `Delete "${b.name}" and its upcoming dues? Past payments stay in your transactions.` });
+  },
+
+  card: (c) => formSheet(`Edit ${c.issuer} ••${c.last4}`, [
+    [{ name: "issuer", label: "Bank", required: true, value: c.issuer },
+     { name: "last4", label: "Last 4 digits", required: true, value: c.last4 }],
+    { name: "limit", label: "Credit limit", type: "money", required: true, value: rupeesIn(c.credit_limit_paise) },
+    [{ name: "statement_day", label: "Statement day", type: "number", min: 1, max: 31, required: true, value: c.statement_day },
+     { name: "due_day", label: "Due day", type: "number", min: 1, max: 31, required: true, value: c.due_day }],
+  ], "Save changes", (v) => {
+    if (!/^\d{4}$/.test(v.last4)) throw new Error("Enter exactly the last 4 digits.");
+    return api.updateCard(c.id, { issuer: v.issuer.trim(), last4: v.last4, credit_limit_paise: moneyOk(v.limit, "the limit"),
+      statement_day: dayOk(v.statement_day, "Statement day"), due_day: dayOk(v.due_day, "Due day") });
+  }, { onDelete: async () => { await api.deleteCard(c); await refreshCache(); }, deleteLabel: "Delete card",
+       deleteText: `Delete the ${c.issuer} ••${c.last4} card and its card bills? Past transactions stay.` }),
+
+  async statement(st) {
+    const s0 = await api.statement(st.id);
+    formSheet("Edit card bill", [
+      [{ name: "total", label: "Total due", type: "money", required: true, value: rupeesIn(s0.total_due_paise) },
+       { name: "min", label: "Minimum due", type: "money", required: true, value: rupeesIn(s0.min_due_paise) }],
+      [{ name: "statement_date", label: "Statement date", type: "date", required: true, value: s0.statement_date },
+       { name: "due_date", label: "Pay by", type: "date", required: true, value: s0.due_date }],
+    ], "Save changes", (v) => {
+      const total = moneyOk(v.total, "the total");
+      const paid = s0.paid_paise || 0;
+      return api.updateStatement(st.id, { total_due_paise: total, min_due_paise: toPaise(v.min), statement_date: v.statement_date, due_date: v.due_date,
+        status: paid >= total ? "paid" : paid > 0 ? "partial" : "open" });
+    }, { onDelete: () => api.deleteStatement(st.id), deleteLabel: "Delete card bill" });
+  },
+
+  goal: (g) => formSheet(`Edit ${g.name}`, [
+    { name: "kind", label: "Type", type: "select", options: GOAL_KINDS, value: g.kind },
+    { name: "name", label: "Name", required: true, value: g.name },
+    [{ name: "target", label: "Amount needed", type: "money", required: true, value: rupeesIn(g.target_paise) },
+     { name: "saved", label: "Saved so far", type: "money", value: rupeesIn(g.saved_paise) }],
+    { name: "target_date", label: "Needed by", type: "date", required: true, value: g.target_date },
+  ], "Save changes", (v) => {
+    const target = moneyOk(v.target, "an amount"), saved = Math.max(toPaise(v.saved || 0), 0);
+    return api.updateGoal(g.id, { kind: v.kind, name: v.name.trim(), target_paise: target, saved_paise: saved, target_date: v.target_date,
+      status: saved >= target ? "achieved" : "active" });
+  }, { onDelete: () => api.deleteGoal(g.id), deleteLabel: "Delete goal", deleteText: `Delete the goal "${g.name}"? Investments linked to it will count towards freedom instead.` }),
+
+  holding: (h, goals) => formSheet(`Edit ${h.name}`, [
+    { name: "asset_class", label: "Type", type: "select", options: ASSET_TYPES, value: h.asset_class },
+    { name: "name", label: "Name", required: true, value: h.name },
+    [{ name: "invested", label: "Amount invested", type: "money", required: true, value: rupeesIn(h.invested_paise) },
+     { name: "current", label: "Value today", type: "money", required: true, value: rupeesIn(h.current_paise) }],
+    { name: "sip", label: "Monthly SIP", type: "money", value: rupeesIn(h.sip_paise) },
+    { name: "goal_id", label: "For a goal?", type: "select", value: h.goal_id || "", options: [["", "No, for financial freedom"], ...goals.filter((g) => g.kind !== "financial_freedom").map((g) => [g.id, g.name])] },
+  ], "Save changes", (v) => api.updateHolding(h.id, { asset_class: v.asset_class, name: v.name.trim(), invested_paise: Math.max(toPaise(v.invested), 0),
+    current_paise: Math.max(toPaise(v.current), 0), sip_paise: Math.max(toPaise(v.sip || 0), 0), goal_id: v.goal_id || null }),
+  { onDelete: () => api.deleteHolding(h.id), deleteLabel: "Delete investment" }),
+
+  txn(t) {
+    const income = t.amount_paise > 0;
+    formSheet(income ? "Edit income" : "Edit expense", [
+      { name: "amount", label: "Amount", type: "money", required: true, value: rupeesIn(Math.abs(t.amount_paise)) },
+      { name: "category_id", label: "Category", type: "select", options: categoryOptions(income ? "income" : "expense"), value: t.category_id },
+      { name: "merchant", label: income ? "From" : "Where / what", value: t.merchant || "" },
+      [{ name: "account_id", label: "Account", type: "select", options: accountOptions((a) => a.kind !== "loan" && a.kind !== "investment"), value: t.account_id },
+       { name: "txn_date", label: "Date", type: "date", required: true, value: t.txn_date }],
+    ], "Save changes", (v) => {
+      const amt = moneyOk(v.amount, "an amount");
+      return api.updateTransaction(t, { amount_paise: income ? amt : -amt, category_id: Number(v.category_id), merchant: v.merchant || null,
+        account_id: v.account_id, txn_date: v.txn_date });
+    }, { onDelete: () => api.deleteTransaction(t), deleteLabel: income ? "Delete income" : "Delete expense" });
+  },
+
+  account: (a) => formSheet(`Edit ${a.name}`, [
+    [{ name: "name", label: "Name", required: true, value: a.name },
+     { name: "last4", label: "Last 4 digits", value: a.last4 || "", hint: "Optional" }],
+  ], "Save changes", async (v) => {
+    if (v.last4 && !/^\d{4}$/.test(v.last4)) throw new Error("Enter exactly 4 digits, or leave it empty.");
+    await api.updateAccount(a.id, { name: v.name.trim(), last4: v.last4 || null }); await refreshCache();
+  }, { onDelete: async () => {
+      if (cache.accounts.filter((x) => ["bank", "cash", "wallet"].includes(x.kind)).length <= 1 && ["bank", "cash", "wallet"].includes(a.kind)) throw new Error("Keep at least one bank, cash or wallet account.");
+      await api.updateAccount(a.id, { is_active: false }); await refreshCache();
+    }, deleteLabel: "Remove account", deletedToast: "Account removed", deleteText: `Remove "${a.name}"? Its past transactions stay in your history.` }),
+};
+// lists: { kind: arrayOfItems }. Opens the matching editor for a clicked [data-edit] button.
+function bindEdit(root, lists, extra) {
+  root.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => {
+    const kind = b.dataset.edit, item = (lists[kind] || []).find((x) => String(x.id) === b.dataset.id);
+    if (item) EDITORS[kind](item, extra);
+  }));
 }
 
 const categoryOptions = (kind) => cache.categories
@@ -388,7 +526,7 @@ const payBtn = (d) => `<button class="btn small soft" data-pay='${esc(JSON.strin
 function dueItem(d) {
   return `<div class="item">${tile(TYPE[d.type].icon, TYPE[d.type].color)}<div class="grow"><div class="title">${esc(d.name)}</div>
     <div class="meta">${statusChip(d)}<span>${fmtDate(d.due_date)}</span>${d.autopay ? "<span>· autopay</span>" : ""}</div></div>
-    <div class="amt tnum">${rupees(d.amount_paise)}</div>${payBtn(d)}</div>`;
+    <div class="amt tnum">${rupees(d.amount_paise)}</div>${payBtn(d)}${d.type === "card" ? editBtn("statement", d.id, "Edit card bill") : d.type === "emi" ? editBtn("loan", d.id, "Edit loan") : ""}</div>`;
 }
 function dueCard(d) {
   const n = daysFrom(d.due_date);
@@ -520,7 +658,7 @@ async function viewMoney(main) {
       out += `<div class="item">${tile(ICON[bk] || ICON.wallet, BUCKET[bk].color)}<div class="grow"><div class="title">${esc(t.merchant || c?.name || "Transaction")}</div>
         <div class="meta">${esc(c?.name || "Uncategorised")}</div></div>
         <div class="amt tnum ${t.amount_paise > 0 ? "up" : ""}">${t.amount_paise > 0 ? "+" : "−"}${rupees(Math.abs(t.amount_paise))}</div>
-        <button class="icon-btn" style="width:34px;height:34px" aria-label="Delete" data-del='${esc(JSON.stringify({ id: t.id, txn_date: t.txn_date }))}'>${ICON.trash.replace("<svg", '<svg width="16" height="16"')}</button></div>`;
+        ${editBtn("txn", t.id, "Edit transaction")}</div>`;
     });
     return out;
   };
@@ -548,16 +686,14 @@ async function viewMoney(main) {
       ${txns.length >= 30 ? `<button class="btn small ghost block" id="more" style="margin-top:10px">Load more</button>` : ""}</section>`;
 
   let last = txns[txns.length - 1];
-  const bindDel = (root) => root.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm("Delete this transaction?")) return;
-    await api.deleteTransaction(JSON.parse(b.dataset.del)); toast("Deleted"); render();
-  }));
+  const loaded = [...txns];
+  const bindDel = (root) => bindEdit(root, { txn: loaded });
   bindDel(main);
   $("#add-inc", main).addEventListener("click", () => quickAdd("income"));
   $("#add-exp", main).addEventListener("click", () => quickAdd("expense"));
   $("#more", main)?.addEventListener("click", async (e) => {
     const more = await api.transactions(last);
-    if (more.length) { const frag = document.createElement("div"); frag.innerHTML = txHtml(more, last.txn_date); bindDel(frag); $("#tx", main).append(...frag.children); last = more[more.length - 1]; }
+    if (more.length) { loaded.push(...more); const frag = document.createElement("div"); frag.innerHTML = txHtml(more, last.txn_date); bindDel(frag); $("#tx", main).append(...frag.children); last = more[more.length - 1]; }
     if (more.length < 30) e.target.remove();
   });
 }
@@ -592,16 +728,17 @@ async function viewDues(main) {
       <section class="card"><div class="card-head"><h2>Loans / EMIs</h2></div><div class="list">${loans.length ? loans.map((l) => {
         const paid = pct(l.principal_paise - l.outstanding_paise, l.principal_paise);
         return `<div class="item" style="display:grid;gap:8px"><div class="row">${tile(ICON.emi, "var(--c-6)")}<div class="grow" style="min-width:0"><div class="title">${esc(l.lender)}</div>
-          <div class="meta">${esc(l.loan_type)} · ${(l.interest_rate_bps / 100).toFixed(2)}% · day ${l.emi_day}</div></div><div class="amt tnum">${rupees(l.emi_paise)}</div></div>
+          <div class="meta">${esc(l.loan_type)} · ${(l.interest_rate_bps / 100).toFixed(2)}% · day ${l.emi_day}</div></div><div class="amt tnum">${rupees(l.emi_paise)}</div>${editBtn("loan", l.id, "Edit loan")}</div>
           <div class="bar"><span style="width:${paid}%;background:var(--c-6)" data-tip="${esc(l.lender)} loan|${paid}% repaid · ${esc(compact(l.outstanding_paise))} left"></span></div>
           <div class="row tiny muted"><span>${paid}% repaid</span><span class="tnum">${compact(l.outstanding_paise)} left</span></div></div>`;
       }).join("") : `<div class="empty">No loans added</div>`}</div></section>
       <section class="card"><div class="card-head"><h2>Credit cards</h2></div><div class="list">${cards.length ? cards.map((c) => `<div class="item">${tile(ICON.card, "var(--c-2)")}<div class="grow"><div class="title">${esc(c.issuer)} ••${esc(c.last4)}</div>
-        <div class="meta">Statement day ${c.statement_day} · due day ${c.due_day}</div></div><div class="amt tnum small">${compact(c.credit_limit_paise)}<div class="tiny muted">limit</div></div></div>`).join("") : `<div class="empty">No cards added</div>`}</div></section>
+        <div class="meta">Statement day ${c.statement_day} · due day ${c.due_day}</div></div><div class="amt tnum small">${compact(c.credit_limit_paise)}<div class="tiny muted">limit</div></div>${editBtn("card", c.id, "Edit card")}</div>`).join("") : `<div class="empty">No cards added</div>`}</div></section>
       <section class="card"><div class="card-head"><h2>Regular bills</h2></div><div class="list">${bills.length ? bills.map((b) => `<div class="item">${tile(ICON.bill, "var(--c-1)")}<div class="grow"><div class="title">${esc(b.name)}</div>
-        <div class="meta">${freqLabel[b.frequency]} · next ${fmtDate(b.next_due_date)}</div></div><div class="amt tnum">${rupees(b.amount_paise)}</div></div>`).join("") : `<div class="empty">No bills added</div>`}</div></section>
+        <div class="meta">${freqLabel[b.frequency]}${b.autopay ? " · autopay" : ""}</div></div><div class="amt tnum">${rupees(b.amount_paise)}</div>${editBtn("bill", b.id, "Edit bill")}</div>`).join("") : `<div class="empty">No bills added</div>`}</div></section>
     </div>`;
   bindPay(main);
+  bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
 
   const nonIncome = cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
   $("#add-bill", main).addEventListener("click", () => formSheet("Add a regular bill", [
@@ -679,7 +816,7 @@ async function viewGrow(main) {
         const p = pct(g.saved_paise, g.target_paise);
         return `<section class="card"><div class="row" style="justify-content:flex-start;gap:16px">
           ${ring(p, { size: 92, stroke: 9, color: kindColor[g.kind] || "var(--c-1)", label: g.name, center: `<b style="font-size:18px">${p}%</b>` })}
-          <div class="stack grow" style="gap:4px;min-width:0;flex:1"><div class="row"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.name)}</b>${g.status === "achieved" ? `<span class="chip good">${ICON.check}Reached</span>` : ""}</div>
+          <div class="stack grow" style="gap:4px;min-width:0;flex:1"><div class="row"><b style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.name)}</b><span class="btn-row" style="flex-wrap:nowrap">${g.status === "achieved" ? `<span class="chip good">${ICON.check}Reached</span>` : ""}${editBtn("goal", g.id, "Edit goal")}</span></div>
             <div class="small text-2 tnum">${rupees(g.saved_paise)} of ${rupees(g.target_paise)}</div>
             ${g.target_date ? `<div class="tiny muted">by ${fmtDate(g.target_date, { month: "short", year: "numeric" })}</div>` : ""}
             ${left > 0 && g.target_date ? `<div class="small">Save <b class="tnum">${rupees(perMonth)}</b>/month · ${rupees(perMonth * 12 / 365)}/day</div>` : ""}</div></div>
@@ -706,7 +843,7 @@ async function viewGrow(main) {
           return `<div class="item">${tile(ICON.invest, color)}<div class="grow"><div class="title">${esc(h.name)}</div>
             <div class="meta">${esc(label)}${h.sip_paise ? ` · SIP ${rupees(h.sip_paise)}` : ""}${h.goal_id ? ` · for ${esc(goals.find((x) => x.id === h.goal_id)?.name || "a goal")}` : ""}</div></div>
             <div class="amt tnum">${compact(h.current_paise)}<div class="tiny ${g >= 0 ? "up" : "down"}">${g >= 0 ? "+" : "−"}${compact(Math.abs(g))}</div></div>
-            <button class="btn small ghost" data-upd="${h.id}">Update</button></div>`;
+            ${editBtn("holding", h.id, "Edit investment")}</div>`;
         }).join("") : `<div class="empty">${tile(ICON.invest, "var(--c-5)")}Add your mutual funds, PPF, FD, gold and more</div>`}</div>
         <p class="tiny muted" style="margin:12px 0 0">Investments not linked to a goal count towards financial freedom. Real estate is not counted.</p></section>`;
   }
@@ -735,13 +872,7 @@ async function viewGrow(main) {
   ], "Add investment", (v) => api.addHolding({ asset_class: v.asset_class, name: v.name, invested_paise: toPaise(v.invested), current_paise: toPaise(v.current),
     sip_paise: toPaise(v.sip || 0), goal_id: v.goal_id || null })));
 
-  main.querySelectorAll("[data-upd]").forEach((b) => b.addEventListener("click", () => {
-    const h = holdings.find((x) => x.id === b.dataset.upd);
-    formSheet(`Update ${h.name}`, [
-      [{ name: "current", label: "Value today", type: "money", value: h.current_paise / 100, required: true },
-       { name: "sip", label: "Monthly SIP", type: "money", value: h.sip_paise / 100 }],
-    ], "Save", (v) => api.updateHolding(h.id, { current_paise: toPaise(v.current), sip_paise: toPaise(v.sip || 0) }));
-  }));
+  bindEdit(main, { goal: goals, holding: holdings }, goals);
 }
 
 // ---------------------------------------------------------------------------
@@ -828,7 +959,7 @@ async function viewSettings(main) {
     </div>
 
     <section class="card"><div class="card-head"><h2>Accounts</h2><button class="btn small soft" id="add-acc">+ Account</button></div><div class="list">${cache.accounts.map((a) => `<div class="item">${tile({ credit_card: ICON.card, loan: ICON.emi, investment: ICON.invest }[a.kind] || ICON.wallet, "var(--c-1)")}
-      <div class="grow"><div class="title">${esc(a.name)}${a.last4 ? ` ••${esc(a.last4)}` : ""}</div><div class="meta">${esc(a.kind.replace("_", " "))}</div></div></div>`).join("")}</div></section>
+      <div class="grow"><div class="title">${esc(a.name)}${a.last4 ? ` ••${esc(a.last4)}` : ""}</div><div class="meta">${esc(a.kind.replace("_", " "))}</div></div>${a.kind === "credit_card" ? "" : editBtn("account", a.id, "Edit account")}</div>`).join("")}</div></section>
 
     <section class="card"><div class="card-head"><h2>Security</h2>${tile(ICON.shield, "var(--good-text)")}</div>
       <div class="btn-row"><button class="btn ghost small" id="chg">Change password</button><button class="btn ghost small" id="out">Sign out</button><button class="btn danger small" id="out-all">Sign out everywhere</button></div>
@@ -836,6 +967,7 @@ async function viewSettings(main) {
         <div class="meta">${device(e.device || "")} · ${new Date(e.created_at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}</div></div>${e.event === "login_failed" || e.event === "locked" ? `<span class="chip bad">${ICON.alert}Check</span>` : ""}</div>`).join("") : `<div class="empty">No activity yet</div>`}</div></section>
   </div>`;
 
+  bindEdit(main, { account: cache.accounts });
   main.querySelectorAll("[data-theme-set]").forEach((b) => b.addEventListener("click", () => { setTheme(b.dataset.themeSet); render(); }));
   $("#f-set", main).addEventListener("submit", async (e) => {
     e.preventDefault();

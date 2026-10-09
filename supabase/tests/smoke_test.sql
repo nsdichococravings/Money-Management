@@ -82,6 +82,30 @@ insert into fin.goals(household_id, kind, name, target_paise, target_date) value
 insert into fin.goal_contributions(goal_id, contrib_date, amount_paise) values (:'goal', current_date, 1000000);
 select pg_temp.check((select saved_paise from fin.goals where id = :'goal') = 1000000, 'goal contribution adds to saved');
 
+-- ---------- editing and deleting (what the Edit buttons do) ----------
+update fin.loans set emi_paise = 2200000, emi_day = 20, lender = 'SBI Home' where id = :'home_loan';
+select pg_temp.check((select emi_paise from fin.loans where id = :'home_loan') = 2200000, 'a loan can be edited');
+select id as edit_bill from fin.recurring_bills where household_id = :'hid' and name = 'Phone, internet, OTT' \gset
+update fin.recurring_bills set amount_paise = 250000, next_due_date = current_date + 10 where id = :'edit_bill';
+delete from fin.bill_occurrences where bill_id = :'edit_bill' and status = 'due' and due_date >= current_date;
+select fin.roll_bill_occurrences(:'hid') >= 0 as rolled \gset
+select pg_temp.check((select amount_paise from fin.bill_occurrences where bill_id = :'edit_bill' and status = 'due' order by due_date limit 1) = 250000
+  and (select min(due_date) from fin.bill_occurrences where bill_id = :'edit_bill' and status = 'due') = current_date + 10, 'editing a bill rebuilds its upcoming dues');
+select id as tx_edit, txn_date as tx_date from fin.transactions where household_id = :'hid' and merchant = 'Swiggy Instamart' \gset
+select (fin.get_home(:'hid')->>'spent_this_month_paise')::bigint as spent_before \gset
+update fin.transactions set amount_paise = -60000, txn_date = (date_trunc('month', current_date) - interval '1 month')::date
+ where household_id = :'hid' and txn_date = :'tx_date' and id = :'tx_edit';
+select pg_temp.check((fin.get_home(:'hid')->>'spent_this_month_paise')::bigint = :spent_before - 45000, 'moving an expense to last month takes it out of this month''s spending');
+select pg_temp.check((select spend_paise from fin.monthly_category_spend where household_id = :'hid' and category_id = fin.system_category('Groceries')
+  and month = (date_trunc('month', current_date) - interval '1 month')::date) = 60000, 'and adds it to last month');
+delete from fin.goals where id = :'goal';
+select pg_temp.check(not exists (select 1 from fin.goal_contributions where goal_id = :'goal'), 'deleting a goal removes its contributions');
+update fin.accounts set is_active = false where id = :'card_acc';
+delete from fin.credit_cards where id = :'card';
+select pg_temp.check(not exists (select 1 from fin.card_statements where card_id = :'card'), 'deleting a card removes its card bills');
+delete from fin.loans where id = :'home_loan';
+select pg_temp.check(not exists (select 1 from fin.loans where id = :'home_loan'), 'a loan can be deleted');
+
 -- ---------- security ----------
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-0000000000b2', false);
 select fin.ensure_my_household('Stranger') as other \gset
@@ -94,6 +118,14 @@ do $$ declare ok boolean := false; begin
     values (current_setting('wp.priya_household')::uuid, gen_random_uuid(), current_date, 1);
   exception when insufficient_privilege then ok := true; end;
   perform pg_temp.check(ok, 'stranger cannot add a transaction to Priya''s household');
+end $$;
+do $$ declare n int; begin
+  update fin.recurring_bills set amount_paise = 1 where household_id = current_setting('wp.priya_household')::uuid;
+  get diagnostics n = row_count;
+  perform pg_temp.check(n = 0, 'stranger cannot edit Priya''s bills');
+  delete from fin.goals where household_id = current_setting('wp.priya_household')::uuid;
+  get diagnostics n = row_count;
+  perform pg_temp.check(n = 0, 'stranger cannot delete Priya''s goals');
 end $$;
 do $$ declare ok boolean := false; begin
   begin perform fin.roll_bill_occurrences(); exception when others then ok := true; end;
