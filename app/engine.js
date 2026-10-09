@@ -82,6 +82,57 @@ export function whatIf(freedom, extraPerDayPaise) {
   return yrs == null ? null : { years: Math.round(yrs * 10) / 10, date: addDays(new Date(), Math.round(yrs * 365.25)) };
 }
 
+// Average income and spending per month from the daily summaries.
+//  * 60+ days of history: average of the complete calendar months (not the first, partial one, nor this one)
+//  * newer: the last 30 days; scaled up to 30 days only when money comes in on 3+ different days
+//    (a daily earner). A salary entered once is never multiplied.
+export function monthlyAverages(rows, today = new Date()) {
+  const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayOf = (r) => new Date(String(r.day).slice(0, 10) + "T00:00:00");
+  const data = rows.filter((r) => (Number(r.income_paise) || 0) || (Number(r.expense_paise) || 0));
+  if (!data.length) return { income: 0, spend: 0, basis: "no income recorded yet", projected: false };
+  const first = data.reduce((m, r) => (dayOf(r) < m ? dayOf(r) : m), dayOf(data[0]));
+  const historyDays = Math.round((t0 - first) / 86400000) + 1;
+  const ym = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+
+  if (historyDays >= 60) {
+    const skip = new Set([ym(first), ym(t0)]);
+    const months = {};
+    data.forEach((r) => { const k = ym(dayOf(r)); if (skip.has(k)) return; (months[k] ??= { i: 0, e: 0 }); months[k].i += +r.income_paise || 0; months[k].e += +r.expense_paise || 0; });
+    const list = Object.values(months).filter((m) => m.i > 0);
+    if (list.length) return { income: list.reduce((s, m) => s + m.i, 0) / list.length, spend: list.reduce((s, m) => s + m.e, 0) / list.length,
+      basis: `${list.length}-month average`, projected: false };
+  }
+  const from = new Date(t0); from.setDate(from.getDate() - 29);
+  const last = data.filter((r) => dayOf(r) >= from);
+  const income = last.reduce((s, r) => s + (+r.income_paise || 0), 0), spend = last.reduce((s, r) => s + (+r.expense_paise || 0), 0);
+  const days = Math.min(historyDays, 30);
+  const incomeDays = last.filter((r) => +r.income_paise > 0).length, spendDays = last.filter((r) => +r.expense_paise > 0).length;
+  const scaleIncome = days < 30 && incomeDays >= 3 ? 30 / days : 1, scaleSpend = days < 30 && spendDays >= 3 ? 30 / days : 1;
+  const projected = scaleIncome > 1 || scaleSpend > 1;
+  return { income: income * scaleIncome, spend: spend * scaleSpend, projected,
+    basis: scaleIncome > 1 ? `your first ${days} days of income, projected to a month`
+      : days < 30 ? `your first ${days} day${days === 1 ? "" : "s"}` : "last 30 days" };
+}
+
+// Freedom date from the family's own numbers: invest whatever is left after costs each month.
+// Costs = the larger of what was actually spent and the planned monthly needs (bills, EMIs, kids, daily, holidays).
+export function estimateFreedom(freedom, target, avgs) {
+  const b = target.breakdown_paise || {};
+  const planned = (b.fixed || 0) + (b.kids || 0) + (b.daily || 0) + (b.sinking || 0);
+  const income = Math.round(avgs.income || 0);
+  const costs = Math.round(Math.max(avgs.spend || 0, planned));
+  const surplus = income - costs;
+  const sip = freedom.freedom_invest_monthly_paise || 0;
+  const base = { income, costs, surplus, basis: avgs.basis, projected: avgs.projected };
+  if (surplus <= 0) return { ...base, ok: false, shortfall: -surplus };
+  const r = freedom.real_return_pct / 100;
+  const yrs = yearsToFreedom(freedom.fi_number_paise, freedom.corpus_paise, (sip + surplus) * 12, r);
+  if (yrs == null) return { ...base, ok: false, shortfall: 0 };
+  return { ...base, ok: true, years: Math.round(yrs * 10) / 10, date: addDays(new Date(), Math.round(yrs * 365.25)),
+    effective: { ...freedom, freedom_invest_monthly_paise: sip + surplus } };
+}
+
 export function nextDayOfMonth(day, from) {
   const f = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const clamp = (y, m) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));

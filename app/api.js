@@ -89,6 +89,10 @@ async function supabaseApi({ SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_VIA_FUNCTION
     home: () => rpc("get_home", { p_household: hid }),
     dues: (days = 30) => rpc("get_dues", { p_household: hid, p_days: days }),
     monthSpend: (month) => rpc("get_month_spend", { p_household: hid, p_month: month ?? iso(new Date()) }),
+    months: async () => {
+      const d = new Date(); const from = new Date(d.getFullYear(), d.getMonth() - 3, 1);
+      return must(await sb.from("daily_household_summary").select("day,income_paise,expense_paise").eq("household_id", hid).gte("day", iso(from)).order("day"));
+    },
     week: async () => must(await sb.from("daily_household_summary").select("day,income_paise,expense_paise")
       .eq("household_id", hid).gte("day", iso(addDays(new Date(), -6))).order("day")),
     transactions: (before) => rpc("list_transactions", {
@@ -314,6 +318,15 @@ function demoApi() {
         out.push({ type: "card", id: st.id, name: `${c.issuer} card ••${c.last4}`, amount_paise: st.total_due_paise - st.paid_paise, due_date: st.due_date, status: st.due_date < t0 ? "overdue" : "due" });
       });
       return out.sort((a, b) => a.due_date.localeCompare(b.due_date) || b.amount_paise - a.amount_paise);
+    },
+    async months() {
+      const from = new Date(today.getFullYear(), today.getMonth() - 3, 1);
+      const by = {};
+      daySpend(from).forEach((t) => {
+        by[t.txn_date] ??= { day: t.txn_date, income_paise: 0, expense_paise: 0 };
+        if (t.amount_paise > 0) by[t.txn_date].income_paise += t.amount_paise; else by[t.txn_date].expense_paise -= t.amount_paise;
+      });
+      return Object.values(by);
     },
     async week() {
       const from = addDays(today, -6); from.setHours(0, 0, 0, 0);

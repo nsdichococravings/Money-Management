@@ -1,6 +1,6 @@
 // FreedomDay app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
 import { createApi } from "./api.js";
-import { whatIf, monthsUntil } from "./engine.js";
+import { whatIf, monthsUntil, monthlyAverages, estimateFreedom } from "./engine.js";
 import { ring, donut, legend, weekBars, allocBar, installTooltips, countUp } from "./charts.js";
 
 const config = window.FREEDOMDAY_CONFIG || window.WEALTHPILOT_CONFIG || {};
@@ -563,12 +563,22 @@ const WI_STEPS = [
 // Home
 // ---------------------------------------------------------------------------
 async function viewHome(main) {
-  const [h, week, homeBills, homeLoans] = await Promise.all([api.home(), api.week().catch(() => []), api.bills().catch(() => []), api.loans().catch(() => [])]);
+  const [h, week, homeBills, homeLoans, monthRows] = await Promise.all([api.home(), api.week().catch(() => []), api.bills().catch(() => []), api.loans().catch(() => []), api.months().catch(() => [])]);
   h.dues_7d = await api.withBillIds(h.dues_7d).catch(() => h.dues_7d);
   const name = (user.user_metadata?.full_name || "").split(" ")[0];
   const hr = new Date().getHours();
   setTitle(`${hr < 12 ? "Good morning" : hr < 17 ? "Good afternoon" : "Good evening"}${name ? ", " + name : ""}`, h.household?.name || "");
-  const t = h.target, f = h.freedom;
+  const t = h.target, f0 = h.freedom;
+  // No investments yet? Estimate the date from income minus costs instead of showing "—".
+  const est = estimateFreedom(f0, t, monthlyAverages(monthRows));
+  const estimated = f0.years == null && est.ok;
+  const f = estimated ? { ...f0, years: est.years, freedom_date: isoOf(est.date), ...{ freedom_invest_monthly_paise: est.effective.freedom_invest_monthly_paise } } : f0;
+  const freedomNote = f0.fi_number_paise <= 0 ? ""
+    : estimated ? `<div class="small text-2" style="margin-top:10px">Estimated from your numbers: income <b class="tnum">${rupees(est.income)}</b>/month − costs <b class="tnum">${rupees(est.costs)}</b>/month = <b class="tnum up">${rupees(est.surplus)}</b>/month you could invest <span class="muted">(${esc(est.basis)})</span>. Add investments in Goals for an exact date.</div>`
+    : f0.years == null ? (est.income <= 0
+        ? `<div class="small text-2" style="margin-top:10px">Add your income in <a class="linkish" href="#/money">Money</a> and your investments in <a class="linkish" href="#/grow">Goals</a> to see your Freedom date.</div>`
+        : `<div class="small" style="margin-top:10px"><span class="chip warn">${ICON.alert}Not reachable yet</span> Your costs <b class="tnum">${rupees(est.costs)}</b>/month are more than your income <b class="tnum">${rupees(est.income)}</b>/month <span class="muted">(${esc(est.basis)})</span>. Earn <b class="tnum">${rupees(est.shortfall)}</b>/month more (<b class="tnum">${rupees(est.shortfall * 12 / 365)}</b>/day) to start building freedom, or use the slider to see what extra earning does.</div>`)
+    : est.ok ? `<div class="small text-2" style="margin-top:10px">Also investing your monthly surplus of <b class="tnum up">${rupees(est.surplus)}</b> would bring it to <b>${fmtDate(isoOf(est.date), { month: "short", year: "numeric" })}</b>.</div>` : "";
   const empty = !t || t.monthly_paise === 0;
   const weekPct = pct(h.earned_this_week_paise, t.weekly_paise);
   const duesTotal = h.dues_7d.reduce((s, d) => s + d.amount_paise, 0);
@@ -606,13 +616,13 @@ async function viewHome(main) {
       </section>
 
       <section class="card" aria-label="Financial freedom">
-        <div class="card-head"><h2>Financial freedom</h2><span class="chip info">${ICON.clock}${yearsText(f.years)}</span></div>
+        <div class="card-head"><h2>Financial freedom</h2><span class="btn-row" style="flex-wrap:nowrap">${estimated ? `<span class="chip gold">Estimated</span>` : ""}<span class="chip info">${ICON.clock}${yearsText(f.years)}</span></span></div>
         <div class="row" style="justify-content:flex-start;gap:18px">
           ${ring(f.pct, { size: 128, stroke: 12, color: "var(--text-2)", label: "Freedom progress", center: `<b>${f.pct}%</b><span class="tiny muted">funded</span>` })}
           <div class="stack" style="gap:4px"><span class="eyebrow">Freedom date</span>
             <div class="big">${f.freedom_date ? fmtDate(f.freedom_date, { month: "short", year: "numeric" }) : "—"}</div>
             <div class="small text-2 tnum">${compact(f.corpus_paise)} of ${compact(f.fi_number_paise)}</div></div>
-        </div>
+        </div>${freedomNote}
         ${f.fi_number_paise > 0 ? `<div class="stack" style="margin-top:16px;gap:4px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">If I earn and invest more each day</span><label class="wi-box">+₹<input id="wi-num" type="number" inputmode="numeric" min="0" max="1000000" step="100" value="0" aria-label="Extra rupees per day">/day</label></div>
           <input type="range" id="wi" min="0" max="${WI_STEPS.length - 1}" step="1" value="0" aria-label="Extra rupees per day">
           <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [1000, "₹1K"], [10000, "₹10K"], [50000, "₹50K"], [200000, "₹2L"]].map(([v, l]) =>
@@ -654,11 +664,19 @@ async function viewHome(main) {
       <div class="item"><div class="grow"><div class="title">Needed per month</div><div class="meta">× 12 ÷ 365 = per day · × 7 = per week</div></div><div class="amt tnum">${rupees(t.monthly_paise)}</div></div></div>`);
   });
   const wi = $("#wi", main), wiNum = $("#wi-num", main);
+  const useSurplus = f0.years == null && est.income > 0;   // no investments yet: plan from income − costs
   const showWhatIf = (rupeesPerDay) => {
     const extra = Math.max(0, Math.round(rupeesPerDay)) * 100;
-    const r = whatIf(f, extra);
-    $("#wi-out", main).innerHTML = !extra ? "Move the slider or type an amount to see your new freedom date."
-      : r ? `Investing <b class="tnum">${rupees(extra * 365 / 12)}</b>/month more: freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null && f.years > r.years ? ` · <b class="up">${Math.round((f.years - r.years) * 10) / 10} years sooner</b>` : ""}`
+    const out = $("#wi-out", main);
+    if (!extra) { out.innerHTML = "Move the slider or type an amount to see your new freedom date."; return; }
+    // extra earning first covers any gap between costs and income; the rest is invested
+    const investPerDay = useSurplus ? est.surplus * 12 / 365 + extra : extra;
+    if (investPerDay <= 0) {
+      out.innerHTML = `That covers part of your gap. Earn <b class="tnum">${rupees(-investPerDay)}</b>/day more to cover your costs and start investing.`;
+      return;
+    }
+    const r = whatIf(f0, investPerDay);
+    out.innerHTML = r ? `Investing <b class="tnum">${rupees(investPerDay * 365 / 12)}</b>/month: freedom in <b>${r.years} years</b> (${r.date.toLocaleDateString("en-IN", { month: "short", year: "numeric" })})${f.years != null && f.years > r.years ? ` · <b class="up">${Math.round((f.years - r.years) * 10) / 10} years sooner</b>` : ""}`
       : "Add investments to see this.";
   };
   wi?.addEventListener("input", () => { const v = WI_STEPS[Number(wi.value)]; wiNum.value = v; showWhatIf(v); });
