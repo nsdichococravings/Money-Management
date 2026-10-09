@@ -144,7 +144,7 @@ const getTheme = () => { try { return localStorage.getItem(THEME_KEY) || "dark";
 function applyTheme(choice = getTheme()) {
   const t = choice === "system" ? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") : choice;
   document.documentElement.dataset.theme = t;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#f3f4f9" : "#07080d");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", t === "light" ? "#eef0f3" : "#0a0b0d");
 }
 function setTheme(choice) { try { localStorage.setItem(THEME_KEY, choice); } catch { /* private mode */ } applyTheme(choice); }
 
@@ -436,7 +436,7 @@ async function viewHome(main) {
           <div class="stack" style="gap:6px"><span class="eyebrow">Earn today</span>
             <div class="hero-num" id="hero-day">${rupees(t.daily_paise)}</div>
             <div class="text-2 small"><b class="tnum" style="color:var(--text)">${rupees(t.weekly_paise)}</b> per week · ${rupees(t.working_day_paise)} per working day</div></div>
-          ${ring(weekPct, { size: 112, stroke: 10, color: "var(--c-3)", label: "Earned this week", center: `<b>${weekPct}%</b><span class="tiny muted">this week</span>` })}
+          ${ring(weekPct, { size: 112, stroke: 10, color: "var(--accent)", label: "Earned this week", center: `<b>${weekPct}%</b><span class="tiny muted">this week</span>` })}
         </div>
         <div style="margin-top:14px">${weekBars(days, t.daily_paise, { fmt: rupees })}</div>
         <div class="row small"><span class="text-2">Earned this week <b class="tnum" style="color:var(--text)">${rupees(h.earned_this_week_paise)}</b></span>
@@ -446,7 +446,7 @@ async function viewHome(main) {
       <section class="card" aria-label="Financial freedom">
         <div class="card-head"><h2>Financial freedom</h2><span class="chip info">${ICON.clock}${yearsText(f.years)}</span></div>
         <div class="row" style="justify-content:flex-start;gap:18px">
-          ${ring(f.pct, { size: 128, stroke: 12, color: "var(--c-6)", label: "Freedom progress", center: `<b>${f.pct}%</b><span class="tiny muted">funded</span>` })}
+          ${ring(f.pct, { size: 128, stroke: 12, color: "var(--text-2)", label: "Freedom progress", center: `<b>${f.pct}%</b><span class="tiny muted">funded</span>` })}
           <div class="stack" style="gap:4px"><span class="eyebrow">Freedom date</span>
             <div class="big">${f.freedom_date ? fmtDate(f.freedom_date, { month: "short", year: "numeric" }) : "—"}</div>
             <div class="small text-2 tnum">${compact(f.corpus_paise)} of ${compact(f.fi_number_paise)}</div></div>

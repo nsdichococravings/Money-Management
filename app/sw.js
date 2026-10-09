@@ -1,5 +1,5 @@
 // WealthPilot service worker: the app shell works offline; money data always comes fresh from the network.
-const CACHE = "wealthpilot-v2";
+const CACHE = "wealthpilot-v3";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./api.js", "./engine.js", "./charts.js", "./config.js", "./manifest.json", "./icon.svg"];
 
 self.addEventListener("install", (e) => {
