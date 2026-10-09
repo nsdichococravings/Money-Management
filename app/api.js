@@ -128,6 +128,38 @@ async function supabaseApi({ SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_VIA_FUNCTION
     contribute: async (goalId, amount) => must(await sb.from("goal_contributions").insert({ goal_id: goalId, contrib_date: iso(new Date()), amount_paise: amount })),
     addHolding: async (h) => must(await sb.from("holdings").insert({ ...h, household_id: hid })),
     updateHolding: async (id, f) => must(await sb.from("holdings").update({ ...f, updated_at: new Date().toISOString() }).eq("id", id)),
+    deleteHolding: async (id) => must(await sb.from("holdings").delete().eq("id", id)),
+
+    // ---------- edit & delete ----------
+    updateTransaction: async (t, f) => must(await sb.from("transactions").update(f)
+      .eq("household_id", hid).eq("txn_date", t.txn_date).eq("id", t.id)),
+    updateLoan: async (id, f) => must(await sb.from("loans").update(f).eq("id", id)),
+    deleteLoan: async (id) => must(await sb.from("loans").delete().eq("id", id)),
+    async updateBill(id, f) {
+      must(await sb.from("recurring_bills").update(f).eq("id", id));
+      // rebuild the upcoming dues so a new amount or date shows straight away (paid/overdue ones stay)
+      must(await sb.from("bill_occurrences").delete().eq("bill_id", id).eq("status", "due").gte("due_date", iso(new Date())));
+      await rpc("roll_bill_occurrences", { p_household: hid });
+    },
+    deleteBill: async (id) => must(await sb.from("recurring_bills").delete().eq("id", id)),
+    // the date the edit form should show: the earliest unpaid upcoming due, else the stored next date
+    async billNextOpen(bill) {
+      const rows = must(await sb.from("bill_occurrences").select("due_date").eq("bill_id", bill.id).eq("status", "due")
+        .gte("due_date", iso(new Date())).order("due_date").limit(1));
+      return rows[0]?.due_date ?? bill.next_due_date;
+    },
+    updateCard: async (id, f) => must(await sb.from("credit_cards").update(f).eq("id", id)),
+    async deleteCard(card) {
+      must(await sb.from("credit_cards").delete().eq("id", card.id));
+      // keep the card's past transactions; just hide its account
+      if (card.account_id) must(await sb.from("accounts").update({ is_active: false }).eq("id", card.account_id));
+    },
+    statement: async (id) => must(await sb.from("card_statements").select("*").eq("id", id).single()),
+    updateStatement: async (id, f) => must(await sb.from("card_statements").update(f).eq("id", id)),
+    deleteStatement: async (id) => must(await sb.from("card_statements").delete().eq("id", id)),
+    updateGoal: async (id, f) => must(await sb.from("goals").update(f).eq("id", id)),
+    deleteGoal: async (id) => must(await sb.from("goals").delete().eq("id", id)),
+    updateAccount: async (id, f) => must(await sb.from("accounts").update(f).eq("id", id)),
     setInsight: async (id, status) => must(await sb.from("ai_insights").update({ status }).eq("id", id)),
     updateProfile: async (f) => must(await sb.from("profiles").update(f).eq("user_id", (await sb.auth.getUser()).data.user.id)),
     updateSettings: async (settings) => must(await sb.from("households").update({ settings }).eq("id", hid)),
@@ -300,7 +332,7 @@ function demoApi() {
       return all.slice(start, start + 30);
     },
     categories: async () => CATS,
-    accounts: async () => s.accounts,
+    accounts: async () => s.accounts.filter((a) => a.is_active !== false),
     bills: async () => s.bills,
     loans: async () => s.loans.filter((l) => l.status === "active"),
     cards: async () => s.cards,
@@ -342,6 +374,31 @@ function demoApi() {
     },
     addHolding: async (h) => { s.holdings.push({ id: id(), ...h }); },
     updateHolding: async (hId, f) => Object.assign(s.holdings.find((x) => x.id === hId), f),
+    deleteHolding: async (hId) => { s.holdings = s.holdings.filter((x) => x.id !== hId); },
+    updateTransaction: async (t, f) => Object.assign(s.txns.find((x) => x.id === t.id), f),
+    updateLoan: async (lId, f) => Object.assign(s.loans.find((x) => x.id === lId), f),
+    deleteLoan: async (lId) => { s.loans = s.loans.filter((x) => x.id !== lId); },
+    async updateBill(bId, f) {
+      const b = Object.assign(s.bills.find((x) => x.id === bId), f);
+      s.occurrences = s.occurrences.filter((o) => !(o.bill_id === bId && o.status === "due" && o.due_date >= iso(today)));
+      let due = new Date(b.next_due_date);
+      while (due <= addDays(today, 35)) {
+        if (!s.occurrences.some((o) => o.bill_id === bId && o.due_date === iso(due))) s.occurrences.push({ id: id(), bill_id: bId, due_date: iso(due), amount_paise: b.amount_paise, status: "due" });
+        due = nextDue(due, b.frequency);
+      }
+      b.next_due_date = iso(due);
+    },
+    billNextOpen: async (bill) => s.occurrences.filter((o) => o.bill_id === bill.id && o.status === "due" && o.due_date >= iso(today))
+      .map((o) => o.due_date).sort()[0] ?? bill.next_due_date,
+    deleteBill: async (bId) => { s.bills = s.bills.filter((x) => x.id !== bId); s.occurrences = s.occurrences.filter((o) => o.bill_id !== bId); },
+    updateCard: async (cId, f) => Object.assign(s.cards.find((x) => x.id === cId), f),
+    deleteCard: async (card) => { s.cards = s.cards.filter((x) => x.id !== card.id); s.statements = s.statements.filter((x) => x.card_id !== card.id); },
+    statement: async (sId) => s.statements.find((x) => x.id === sId),
+    updateStatement: async (sId, f) => Object.assign(s.statements.find((x) => x.id === sId), f),
+    deleteStatement: async (sId) => { s.statements = s.statements.filter((x) => x.id !== sId); },
+    updateGoal: async (gId, f) => Object.assign(s.goals.find((x) => x.id === gId), f),
+    deleteGoal: async (gId) => { s.goals = s.goals.filter((x) => x.id !== gId); s.holdings.forEach((h) => { if (h.goal_id === gId) h.goal_id = null; }); },
+    updateAccount: async (aId, f) => Object.assign(s.accounts.find((x) => x.id === aId), f),
     setInsight: async (iId, status) => { s.insights.find((x) => x.id === iId).status = status; },
     updateProfile: async (f) => Object.assign(s.profile, f),
     updateSettings: async (settings) => { s.household.settings = settings; },
