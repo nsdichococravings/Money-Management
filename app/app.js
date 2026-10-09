@@ -1,6 +1,6 @@
 // FreedomDay app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
 import { createApi } from "./api.js";
-import { whatIf, monthsUntil, monthlyAverages, estimateFreedom } from "./engine.js";
+import { whatIf, monthsUntil, monthlyAverages, estimateFreedom, debtPlan, addMonths } from "./engine.js";
 import { ring, donut, legend, weekBars, allocBar, installTooltips, countUp } from "./charts.js";
 
 const config = window.FREEDOMDAY_CONFIG || window.WEALTHPILOT_CONFIG || {};
@@ -550,6 +550,78 @@ function dueCard(d) {
 }
 function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay)))); }
 
+// ---------------------------------------------------------------------------
+// Debt-free plan (Dues page card + Home summary)
+// ---------------------------------------------------------------------------
+const loanDebts = (loans) => loans.filter((l) => l.status === "active" && l.outstanding_paise > 0).map((l) => ({
+  id: l.id, name: `${l.lender} · ${l.loan_type} loan`, balance: l.outstanding_paise, rate: (l.interest_rate_bps || 0) / 10000, payment: l.emi_paise }));
+const monthYear = (n) => addMonths(n).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+const yrsMo = (n) => n == null ? "—" : n < 12 ? `${n} month${n === 1 ? "" : "s"}` : `${Math.floor(n / 12)} yr${n >= 24 ? "s" : ""}${n % 12 ? ` ${n % 12} mo` : ""}`;
+// extra money per month for loans: the surplus, plus extra earning (which first covers any gap)
+const debtExtraMonthly = (est, extraPerDayPaise) => Math.max(0, (est && est.income > 0 ? est.surplus : 0) + extraPerDayPaise * 365 / 12);
+
+function debtPlanCard(loans, est) {
+  const debts = loanDebts(loans);
+  if (!debts.length) return `<section class="card" id="debt-plan"><div class="card-head"><h2>Debt-free plan</h2></div>
+    <div class="empty">${tile(ICON.check, "var(--good-text)")}No active loans. You're debt-free!</div></section>`;
+  return `<section class="card glow" id="debt-plan"><div class="card-head"><h2>Debt-free plan</h2>
+      <div class="tabs" role="tablist"><button class="active" data-strategy="avalanche">Highest interest first</button><button data-strategy="snowball">Smallest loan first</button></div></div>
+    <div class="grid g-2" style="align-items:start">
+      <div class="stack" style="gap:6px"><span class="eyebrow">Debt-free by</span><div class="hero-num" style="font-size:44px" id="dp-date">—</div>
+        <div class="small text-2" id="dp-sub"></div>
+        <div class="stack" style="gap:4px;margin-top:10px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">If I earn more each day</span>
+          <label class="wi-box">+₹<input id="dp-num" type="number" inputmode="numeric" min="0" max="1000000" step="100" value="0" aria-label="Extra rupees per day for loans">/day</label></div>
+          <input type="range" id="dp-range" min="0" max="${WI_STEPS.length - 1}" step="1" value="0" aria-label="Extra rupees per day for loans">
+          <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [1000, "₹1K"], [10000, "₹10K"], [50000, "₹50K"], [200000, "₹2L"]].map(([v, l]) =>
+            `<span style="left:${(WI_STEPS.indexOf(v) / (WI_STEPS.length - 1)) * 100}%">${l}</span>`).join("")}</div></div>
+        <div class="small text-2" id="dp-note"></div></div>
+      <div class="list" id="dp-list"></div></div></section>`;
+}
+
+function bindDebtPlan(main, loans, est) {
+  const card = $("#debt-plan", main);
+  const debts = loanDebts(loans);
+  if (!card || !debts.length) return;
+  let strategy = "avalanche", extraDay = 0;
+  const base = debtPlan(debts, 0, strategy, { rollover: false });          // just keep paying EMIs
+  const draw = () => {
+    const extra = Math.round(debtExtraMonthly(est, extraDay));
+    const plan = debtPlan(debts, extra, strategy);
+    const sooner = base.months != null && plan.months != null ? base.months - plan.months : null;
+    const saved = base.reachable && plan.reachable ? base.interest - plan.interest : 0;
+    $("#dp-date", card).textContent = plan.months == null ? "Not yet" : plan.months === 0 ? "Now" : monthYear(plan.months);
+    $("#dp-sub", card).innerHTML = plan.months == null
+      ? `<span class="chip bad">${ICON.alert}EMIs don't cover the interest</span> Raise the EMI or add extra payments.`
+      : `In <b>${yrsMo(plan.months)}</b>${sooner > 0 ? ` · <b class="up">${yrsMo(sooner)} sooner</b> than EMIs alone (${base.months == null ? "never" : monthYear(base.months)})` : ` · same as paying EMIs alone`}
+         ${saved > 0 ? `<br>Saves <b class="up tnum">${rupees(saved)}</b> in interest · total interest ${rupees(plan.interest)}` : `<br>Total interest ${rupees(plan.interest)}`}`;
+    const surplus = est && est.income > 0 ? est.surplus : 0;
+    $("#dp-note", card).innerHTML = extra > 0
+      ? `Putting <b class="tnum">${rupees(extra)}</b>/month extra towards loans${surplus > 0 ? ` (your surplus ${rupees(surplus)}${extraDay ? ` + extra earning ${rupees(extraDay * 365 / 12)}` : ""})` : extraDay && surplus < 0 ? ` (extra earning after covering your ${rupees(-surplus)}/month gap)` : ""}. When a loan closes, its EMI moves to the next one.`
+      : surplus < 0 && extraDay ? `Extra earning of ${rupees(extraDay * 365 / 12)}/month first covers your ${rupees(-surplus)}/month gap between costs and income. Earn <b class="tnum">${rupees(-surplus - extraDay * 365 / 12)}</b>/month more (${rupees((-surplus - extraDay * 365 / 12) * 12 / 365)}/day) before extra loan payments start. Closed loans' EMIs still move to the next loan.`
+      : surplus < 0 ? `Your costs are ${rupees(-surplus)}/month more than your income, so there's nothing extra for loans yet. This date already moves each closed loan's EMI to the next one. Use the slider to see what earning more does.`
+      : `Add income in Money, or use the slider, to see how extra payments close your loans faster.`;
+    const maxM = Math.max(1, ...base.debts.map((d) => d.months || 0), ...plan.debts.map((d) => d.months || 0));
+    $("#dp-list", card).innerHTML = plan.debts.slice().sort((a, b) => (a.months ?? 1e9) - (b.months ?? 1e9)).map((d, i) => {
+      const b = base.debts.find((x) => x.id === d.id);
+      return `<div class="item" style="display:grid;gap:8px"><div class="row">${tile(ICON.emi, "var(--c-6)")}<div class="grow" style="min-width:0"><div class="title">${i + 1}. ${esc(d.name)}</div>
+          <div class="meta">${compact(d.balance)} left · ${(d.rate * 100).toFixed(2)}% · EMI ${rupees(d.payment)}</div></div>
+          <div class="amt small" style="text-align:right">${d.months == null ? "—" : monthYear(d.months)}<div class="tiny muted">${b?.months != null && d.months != null && b.months > d.months ? `was ${monthYear(b.months)}` : yrsMo(d.months)}</div></div></div>
+        <div class="bar" data-tip="${esc(d.name)}|closes ${d.months == null ? "never" : monthYear(d.months)}${b?.months ? ` · EMIs alone ${monthYear(b.months)}` : ""}"><span style="width:${d.months == null ? 100 : Math.max(2, (d.months / maxM) * 100)}%;background:var(--c-6)"></span></div></div>`;
+    }).join("");
+  };
+  card.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click", () => {
+    strategy = b.dataset.strategy; card.querySelectorAll("[data-strategy]").forEach((x) => x.classList.toggle("active", x === b)); draw();
+  }));
+  const range = $("#dp-range", card), num = $("#dp-num", card);
+  range.addEventListener("input", () => { extraDay = WI_STEPS[Number(range.value)] * 100; num.value = extraDay / 100; draw(); });
+  num.addEventListener("input", () => {
+    const v = Math.min(Math.max(Number(num.value) || 0, 0), 1000000);
+    range.value = WI_STEPS.reduce((best, step, i) => (Math.abs(step - v) < Math.abs(WI_STEPS[best] - v) ? i : best), 0);
+    extraDay = v * 100; draw();
+  });
+  draw();
+}
+
 // What-if slider steps (₹ per day): fine at the low end, coarse at the top, up to ₹2 lakh
 const WI_STEPS = [
   ...Array.from({ length: 11 }, (_, i) => i * 100),            // 0 – 1,000 by 100
@@ -638,6 +710,18 @@ async function viewHome(main) {
       <div class="stat"><span class="label">Due in 7 days</span><span class="value tnum">${rupees(duesTotal)}</span><span class="delta">${h.dues_7d.length} payment${h.dues_7d.length === 1 ? "" : "s"}</span></div>
     </div>
 
+    ${(() => {
+      const debts = loanDebts(homeLoans);
+      if (!debts.length) return "";
+      const extra = Math.round(debtExtraMonthly(est, 0));
+      const plan = debtPlan(debts, extra), base = debtPlan(debts, 0, "avalanche", { rollover: false });
+      const sooner = plan.months != null && base.months != null ? base.months - plan.months : 0;
+      return `<section class="card"><div class="row" style="flex-wrap:wrap">
+        <div class="row" style="justify-content:flex-start;gap:14px">${tile(ICON.emi, "var(--c-6)")}<div><span class="eyebrow">Debt-free by</span>
+          <div class="mid">${plan.months == null ? "Not yet" : monthYear(plan.months)}</div>
+          <div class="small text-2">${plan.months == null ? "EMIs don't cover the interest" : sooner > 0 ? `${yrsMo(sooner)} sooner than EMIs alone, ${extra > 0 ? "using your surplus" : "by moving each closed loan's EMI to the next"}` : `${debts.length} loan${debts.length === 1 ? "" : "s"} · paying EMIs`}</div></div></div>
+        <a class="btn small soft" href="#/dues">See debt plan</a></div></section>`;
+    })()}
     <section class="card"><div class="card-head"><h2>Coming up this week</h2><a class="link" href="#/dues">All dues</a></div>
       ${h.dues_7d.length ? `<div class="hscroll">${h.dues_7d.map(dueCard).join("")}</div>` : `<div class="empty">${tile(ICON.check, "var(--good-text)")}Nothing due this week</div>`}</section>
 
@@ -754,7 +838,9 @@ async function viewMoney(main) {
 // ---------------------------------------------------------------------------
 async function viewDues(main) {
   setTitle("Dues", "Bills, EMIs and card payments");
-  const [rawDues, bills, loans, cards] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards()]);
+  const [rawDues, bills, loans, cards, duesHome, duesMonths] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards(),
+    api.home().catch(() => null), api.months().catch(() => [])]);
+  const duesEst = duesHome ? estimateFreedom(duesHome.freedom, duesHome.target, monthlyAverages(duesMonths)) : null;
   const dues = await api.withBillIds(rawDues).catch(() => rawDues);
   const late = dues.filter((d) => daysFrom(d.due_date) < 0 || d.status === "overdue");
   const week = dues.filter((d) => !late.includes(d) && daysFrom(d.due_date) <= 7);
@@ -771,6 +857,7 @@ async function viewDues(main) {
       <div class="stat"><span class="label">Next 30 days</span><span class="value tnum">${rupees(sum(dues))}</span><span class="delta">all dues</span></div>
       <div class="stat"><span class="label">Loans left</span><span class="value tnum">${compact(outstanding)}</span><span class="delta">${loans.length} active loan${loans.length === 1 ? "" : "s"}</span></div>
     </div>
+    ${debtPlanCard(loans, duesEst)}
     <section class="card"><div class="card-head"><h2>Upcoming payments</h2>
       <div class="btn-row"><button class="btn small" id="add-bill">+ Bill</button><button class="btn small ghost" id="add-loan">+ Loan / EMI</button>
       <button class="btn small ghost" id="add-card">+ Card</button>${cards.length ? `<button class="btn small soft" id="add-stmt">+ Card bill</button>` : ""}</div></div>
@@ -791,6 +878,7 @@ async function viewDues(main) {
     </div>`;
   bindPay(main);
   bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
+  bindDebtPlan(main, loans, duesEst);
 
   const nonIncome = cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
   $("#add-bill", main).addEventListener("click", () => formSheet("Add a regular bill", [

@@ -133,6 +133,40 @@ export function estimateFreedom(freedom, target, avgs) {
     effective: { ...freedom, freedom_invest_monthly_paise: sip + surplus } };
 }
 
+// Debt-free plan. Month by month: every loan accrues interest and pays its EMI; an extra pool
+// (monthly surplus + extra earning + EMIs of loans already closed) goes to one target loan at a time.
+// strategy "avalanche" = highest interest first, "snowball" = smallest balance first.
+// rollover: false gives the plain "just keep paying EMIs" baseline.
+// debts: [{ id, name, balance, rate (yearly, 0.0865), payment (EMI) }]   amounts in paise
+export function debtPlan(debts, extraMonthly = 0, strategy = "avalanche", { rollover = true, maxMonths = 600 } = {}) {
+  const list = debts.filter((d) => d.balance > 0).map((d) => ({ ...d, bal: d.balance, closed: null, interest: 0 }));
+  if (!list.length) return { months: 0, interest: 0, debts: [], reachable: true };
+  const order = () => list.filter((d) => d.bal > 0).sort(strategy === "snowball" ? (a, b) => a.bal - b.bal : (a, b) => b.rate - a.rate || a.bal - b.bal);
+  let month = 0, totalInterest = 0;
+  while (list.some((d) => d.bal > 0) && month < maxMonths) {
+    month++;
+    let pool = Math.max(0, extraMonthly);
+    for (const d of list) {
+      if (d.bal <= 0) { if (rollover) pool += d.payment; continue; }   // a closed loan's EMI rolls into the pool
+      const interest = d.bal * d.rate / 12;
+      d.bal += interest; d.interest += interest; totalInterest += interest;
+      const pay = Math.min(d.bal, d.payment);
+      d.bal -= pay;
+      if (rollover) pool += d.payment - pay;                     // leftover of a final EMI also rolls on
+    }
+    for (const d of order()) {
+      if (pool <= 0) break;
+      const pay = Math.min(d.bal, pool);
+      d.bal -= pay; pool -= pay;
+    }
+    for (const d of list) if (d.bal <= 0.5 && d.closed == null) { d.bal = 0; d.closed = month; }
+  }
+  const reachable = list.every((d) => d.closed != null);
+  return { months: reachable ? Math.max(...list.map((d) => d.closed)) : null, interest: Math.round(totalInterest), reachable,
+    debts: list.map((d) => ({ id: d.id, name: d.name, balance: d.balance, rate: d.rate, payment: d.payment, months: d.closed, interest: Math.round(d.interest) })) };
+}
+export const addMonths = (n, from = new Date()) => { const d = new Date(from.getFullYear(), from.getMonth() + n, 1); return d; };
+
 export function nextDayOfMonth(day, from) {
   const f = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const clamp = (y, m) => new Date(y, m, Math.min(day, new Date(y, m + 1, 0).getDate()));
