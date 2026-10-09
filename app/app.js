@@ -702,11 +702,19 @@ async function onSignedIn(session) {
 
 async function start() {
   api = await createApi(config);
-  api.onAuth(async (event, session) => {
+  // supabase-js holds a lock while it runs this callback; calling it again from inside
+  // (as onSignedIn does) would wait forever. setTimeout runs the work after the lock is released.
+  api.onAuth((event, session) => setTimeout(async () => {
     if (event === "PASSWORD_RECOVERY") { recovering = true; user = session?.user ?? null; return renderAuth(); }
     if (event === "SIGNED_OUT") { user = null; cache = { categories: [], accounts: [] }; $("#root").innerHTML = ""; return renderAuth(); }
-    if (event === "SIGNED_IN" && (!user || user.id !== session?.user?.id)) await onSignedIn(session);
-  });
+    if (event === "SIGNED_IN" && (!user || user.id !== session?.user?.id)) {
+      try { await onSignedIn(session); } catch (ex) {
+        user = null; $("#root").innerHTML = ""; renderAuth();
+        const err = $("#f-auth .error");
+        if (err) { err.textContent = "Signed in, but your data could not load: " + ex.message; err.classList.remove("hidden"); }
+      }
+    }
+  }, 0));
   const s = await api.session();
   if (s?.user && !user) await onSignedIn(s); else if (!user) renderAuth();
   window.addEventListener("hashchange", render);
