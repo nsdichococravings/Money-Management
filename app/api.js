@@ -3,7 +3,7 @@
 //   * demoApi:     runs in the browser with sample data when config.js has no Supabase URL
 import { computeTarget, computeFreedom, nextDayOfMonth, nextDue, addDays } from "./engine.js";
 
-const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js";
+const SUPABASE_JS = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.79.0/dist/umd/supabase.js";
 const iso = (d) => {
   const x = new Date(d);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
@@ -42,7 +42,7 @@ async function supabaseApi({ SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_VIA_FUNCTION
     }
     const res = await fetch(`${SUPABASE_URL}/functions/v1/auth-login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
       body: JSON.stringify({ email, password }),
     });
     const body = await res.json().catch(() => ({}));
