@@ -411,3 +411,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 28px; }
   #debt-plan .card-head .tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   #debt-plan .card-head .tabs button { padding: 8px 6px; font-size: 13px; }
 }
+
+/* forecast table */
+.fc-table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 520px; }
+.fc-table th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; padding: 8px 10px; border-bottom: 1px solid var(--line-2); }
+.fc-table td { padding: 10px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; vertical-align: top; }
+.fc-table tr { cursor: pointer; }
+.fc-table tbody tr:hover td { background: var(--surface-2); }
+.fc-table tr.mine td { background: var(--accent-soft); }
+.fc-table tr.mine td:first-child { box-shadow: 3px 0 0 var(--accent) inset; }

@@ -1,6 +1,6 @@
 // FreedomDay app: login, Home, Money, Dues, Goals & Investments, Ask AI, Settings.
 import { createApi } from "./api.js";
-import { whatIf, monthsUntil, monthlyAverages, estimateFreedom, debtPlan, addMonths } from "./engine.js";
+import { whatIf, monthsUntil, monthlyAverages, estimateFreedom, debtPlan, addMonths, forecast } from "./engine.js";
 import { ring, donut, legend, weekBars, allocBar, installTooltips, countUp } from "./charts.js";
 
 const config = window.FREEDOMDAY_CONFIG || window.WEALTHPILOT_CONFIG || {};
@@ -560,65 +560,86 @@ const yrsMo = (n) => n == null ? "—" : n < 12 ? `${n} month${n === 1 ? "" : "s
 // extra money per month for loans: the surplus, plus extra earning (which first covers any gap)
 const debtExtraMonthly = (est, extraPerDayPaise) => Math.max(0, (est && est.income > 0 ? est.surplus : 0) + extraPerDayPaise * 365 / 12);
 
+// Monthly-income steps for the forecast slider: ₹10k steps to ₹10 L, then ₹50k steps to ₹50 L
+const INCOME_STEPS = [...Array.from({ length: 101 }, (_, i) => i * 10000), ...Array.from({ length: 80 }, (_, i) => 1050000 + i * 50000)];
+const nearestStep = (steps, v) => steps.reduce((best, step, i) => (Math.abs(step - v) < Math.abs(steps[best] - v) ? i : best), 0);
+const whenText2 = (m) => (m == null ? "Not reachable" : m === 0 ? "Now" : `${monthYear(m)} · ${yrsMo(m)}`);
+
 function debtPlanCard(loans, est) {
   const debts = loanDebts(loans);
-  if (!debts.length) return `<section class="card" id="debt-plan"><div class="card-head"><h2>Debt-free plan</h2></div>
-    <div class="empty">${tile(ICON.check, "var(--good-text)")}No active loans. You're debt-free!</div></section>`;
-  return `<section class="card glow" id="debt-plan"><div class="card-head"><h2>Debt-free plan</h2>
-      <div class="tabs" role="tablist"><button class="active" data-strategy="avalanche">Highest interest first</button><button data-strategy="snowball">Smallest loan first</button></div></div>
+  const income0 = Math.max(0, Math.round((est?.income || 0) / 100));
+  return `<section class="card glow" id="debt-plan"><div class="card-head"><h2>Forecast: debt-free and freedom</h2>
+      ${debts.length ? `<div class="tabs" role="tablist"><button class="active" data-strategy="avalanche">Highest interest first</button><button data-strategy="snowball">Smallest loan first</button></div>` : ""}</div>
     <div class="grid g-2" style="align-items:start">
-      <div class="stack" style="gap:6px"><span class="eyebrow">Debt-free by</span><div class="hero-num" style="font-size:44px" id="dp-date">—</div>
-        <div class="small text-2" id="dp-sub"></div>
-        <div class="stack" style="gap:4px;margin-top:10px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">If I earn more each day</span>
-          <label class="wi-box">+₹<input id="dp-num" type="number" inputmode="numeric" min="0" max="1000000" step="100" value="0" aria-label="Extra rupees per day for loans">/day</label></div>
-          <input type="range" id="dp-range" min="0" max="${WI_STEPS.length - 1}" step="1" value="0" aria-label="Extra rupees per day for loans">
-          <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [1000, "₹1K"], [10000, "₹10K"], [50000, "₹50K"], [200000, "₹2L"]].map(([v, l]) =>
-            `<span style="left:${(WI_STEPS.indexOf(v) / (WI_STEPS.length - 1)) * 100}%">${l}</span>`).join("")}</div></div>
+      <div class="stack" style="gap:10px">
+        <div class="stack" style="gap:4px"><div class="row small" style="flex-wrap:wrap;row-gap:8px"><span class="text-2">My monthly income</span>
+          <label class="wi-box">₹<input id="dp-income" type="number" inputmode="numeric" min="0" max="50000000" step="1000" value="${income0}" aria-label="Monthly income">/month</label></div>
+          <input type="range" id="dp-range" min="0" max="${INCOME_STEPS.length - 1}" step="1" value="${nearestStep(INCOME_STEPS, income0)}" aria-label="Monthly income">
+          <div class="wi-ticks tiny muted" aria-hidden="true">${[[0, "₹0"], [500000, "₹5L"], [1000000, "₹10L"], [3000000, "₹30L"], [5000000, "₹50L"]].map(([v, l]) =>
+            `<span style="left:${(INCOME_STEPS.indexOf(v) / (INCOME_STEPS.length - 1)) * 100}%">${l}</span>`).join("")}</div>
+          <div class="tiny muted">Today: ${income0 ? rupees(income0 * 100) + "/month (" + esc(est?.basis || "") + ")" : "no income recorded yet"} · costs incl. EMIs ${rupees(est?.costs || 0)}/month</div></div>
+        <div class="split" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="stat"><span class="label">Debt-free by</span><span class="value" id="dp-date">—</span><span class="delta" id="dp-date-sub"></span></div>
+          <div class="stat"><span class="label">Freedom by</span><span class="value" id="dp-free">—</span><span class="delta" id="dp-free-sub"></span></div>
+        </div>
         <div class="small text-2" id="dp-note"></div></div>
-      <div class="list" id="dp-list"></div></div></section>`;
+      <div class="list" id="dp-list">${debts.length ? "" : `<div class="empty">${tile(ICON.check, "var(--good-text)")}No active loans. You're debt-free!</div>`}</div></div>
+    <div style="margin-top:16px;overflow-x:auto"><table class="fc-table" aria-label="Forecast by monthly income"><thead><tr><th>Monthly income</th><th>Per day</th><th>Spare / month</th><th>Debt-free by</th><th>Freedom by</th></tr></thead><tbody id="dp-table"></tbody></table></div>
+  </section>`;
 }
 
-function bindDebtPlan(main, loans, est) {
+function bindDebtPlan(main, loans, est, freedom) {
   const card = $("#debt-plan", main);
+  if (!card || !est || !freedom) return;
   const debts = loanDebts(loans);
-  if (!card || !debts.length) return;
-  let strategy = "avalanche", extraDay = 0;
-  const base = debtPlan(debts, 0, strategy, { rollover: false });          // just keep paying EMIs
+  let strategy = "avalanche";
+  const income0 = Math.max(0, est.income || 0);
+  const run = (income) => forecast({ freedom, debts, income, costs: est.costs, strategy });
+  const base = debtPlan(debts, 0, strategy, { rollover: false });           // EMIs alone, nothing extra
   const draw = () => {
-    const extra = Math.round(debtExtraMonthly(est, extraDay));
-    const plan = debtPlan(debts, extra, strategy);
-    const sooner = base.months != null && plan.months != null ? base.months - plan.months : null;
-    const saved = base.reachable && plan.reachable ? base.interest - plan.interest : 0;
-    $("#dp-date", card).textContent = plan.months == null ? "Not yet" : plan.months === 0 ? "Now" : monthYear(plan.months);
-    $("#dp-sub", card).innerHTML = plan.months == null
-      ? `<span class="chip bad">${ICON.alert}EMIs don't cover the interest</span> Raise the EMI or add extra payments.`
-      : `In <b>${yrsMo(plan.months)}</b>${sooner > 0 ? ` · <b class="up">${yrsMo(sooner)} sooner</b> than EMIs alone (${base.months == null ? "never" : monthYear(base.months)})` : ` · same as paying EMIs alone`}
-         ${saved > 0 ? `<br>Saves <b class="up tnum">${rupees(saved)}</b> in interest · total interest ${rupees(plan.interest)}` : `<br>Total interest ${rupees(plan.interest)}`}`;
-    const surplus = est && est.income > 0 ? est.surplus : 0;
-    $("#dp-note", card).innerHTML = extra > 0
-      ? `Putting <b class="tnum">${rupees(extra)}</b>/month extra towards loans${surplus > 0 ? ` (your surplus ${rupees(surplus)}${extraDay ? ` + extra earning ${rupees(extraDay * 365 / 12)}` : ""})` : extraDay && surplus < 0 ? ` (extra earning after covering your ${rupees(-surplus)}/month gap)` : ""}. When a loan closes, its EMI moves to the next one.`
-      : surplus < 0 && extraDay ? `Extra earning of ${rupees(extraDay * 365 / 12)}/month first covers your ${rupees(-surplus)}/month gap between costs and income. Earn <b class="tnum">${rupees(-surplus - extraDay * 365 / 12)}</b>/month more (${rupees((-surplus - extraDay * 365 / 12) * 12 / 365)}/day) before extra loan payments start. Closed loans' EMIs still move to the next loan.`
-      : surplus < 0 ? `Your costs are ${rupees(-surplus)}/month more than your income, so there's nothing extra for loans yet. This date already moves each closed loan's EMI to the next one. Use the slider to see what earning more does.`
-      : `Add income in Money, or use the slider, to see how extra payments close your loans faster.`;
-    const maxM = Math.max(1, ...base.debts.map((d) => d.months || 0), ...plan.debts.map((d) => d.months || 0));
-    $("#dp-list", card).innerHTML = plan.debts.slice().sort((a, b) => (a.months ?? 1e9) - (b.months ?? 1e9)).map((d, i) => {
-      const b = base.debts.find((x) => x.id === d.id);
-      return `<div class="item" style="display:grid;gap:8px"><div class="row">${tile(ICON.emi, "var(--c-6)")}<div class="grow" style="min-width:0"><div class="title">${i + 1}. ${esc(d.name)}</div>
-          <div class="meta">${compact(d.balance)} left · ${(d.rate * 100).toFixed(2)}% · EMI ${rupees(d.payment)}</div></div>
-          <div class="amt small" style="text-align:right">${d.months == null ? "—" : monthYear(d.months)}<div class="tiny muted">${b?.months != null && d.months != null && b.months > d.months ? `was ${monthYear(b.months)}` : yrsMo(d.months)}</div></div></div>
-        <div class="bar" data-tip="${esc(d.name)}|closes ${d.months == null ? "never" : monthYear(d.months)}${b?.months ? ` · EMIs alone ${monthYear(b.months)}` : ""}"><span style="width:${d.months == null ? 100 : Math.max(2, (d.months / maxM) * 100)}%;background:var(--c-6)"></span></div></div>`;
+    const income = Math.max(0, Number($("#dp-income", card).value) || 0) * 100;
+    const f = run(income), now = run(income0);
+    $("#dp-date", card).textContent = !debts.length ? "Done" : f.debtMonths == null ? "Not yet" : f.debtMonths === 0 ? "Now" : monthYear(f.debtMonths);
+    $("#dp-date-sub", card).innerHTML = !debts.length ? "no loans" : f.debtMonths == null ? "EMIs don't cover the interest"
+      : income !== income0 && now.debtMonths != null && now.debtMonths !== f.debtMonths ? `<b class="${f.debtMonths < now.debtMonths ? "up" : "down"}">${yrsMo(Math.abs(now.debtMonths - f.debtMonths))} ${f.debtMonths < now.debtMonths ? "sooner" : "later"}</b> than today`
+      : `in ${yrsMo(f.debtMonths)}`;
+    $("#dp-free", card).textContent = f.freedomMonths == null ? "Not yet" : f.freedomMonths === 0 ? "Now" : monthYear(f.freedomMonths);
+    $("#dp-free-sub", card).innerHTML = f.freedomMonths == null ? (f.spare + f.emiTotal <= 0 ? "income too low" : "add your living costs")
+      : income !== income0 && now.freedomMonths != null && now.freedomMonths !== f.freedomMonths ? `<b class="${f.freedomMonths < now.freedomMonths ? "up" : "down"}">${yrsMo(Math.abs(now.freedomMonths - f.freedomMonths))} ${f.freedomMonths < now.freedomMonths ? "sooner" : "later"}</b> than today`
+      : `in ${yrsMo(f.freedomMonths)}`;
+    $("#dp-note", card).innerHTML = f.spare < 0
+      ? `<span class="chip warn">${ICON.alert}Short ${rupees(-f.spare)}/month</span> At this income your payments (${rupees(est.costs)}) are more than you earn. ${debts.length ? "Loans close on EMIs alone; earn" : "Earn"} <b class="tnum">${rupees(-f.spare)}</b>/month more (<b class="tnum">${rupees(-f.spare * 12 / 365)}</b>/day) to ${debts.length ? "start paying them off faster" : "start investing"}.`
+      : `Spare <b class="tnum up">${rupees(f.spare)}</b>/month goes to your loans${debts.length ? ` (${strategy === "snowball" ? "smallest first" : "highest interest first"}); when a loan closes its EMI moves to the next one. After the last loan, the spare money plus ${rupees(f.emiTotal)}/month of finished EMIs is invested` : " and investments"}.`;
+    if (debts.length) {
+      const maxM = Math.max(1, ...base.debts.map((d) => d.months || 0), ...f.plan.debts.map((d) => d.months || 0));
+      $("#dp-list", card).innerHTML = f.plan.debts.slice().sort((a, b) => (a.months ?? 1e9) - (b.months ?? 1e9)).map((d, i) => {
+        const b = base.debts.find((x) => x.id === d.id);
+        return `<div class="item" style="display:grid;gap:8px"><div class="row">${tile(ICON.emi, "var(--c-6)")}<div class="grow" style="min-width:0"><div class="title">${i + 1}. ${esc(d.name)}</div>
+            <div class="meta">${compact(d.balance)} left · ${(d.rate * 100).toFixed(2)}% · EMI ${rupees(d.payment)}</div></div>
+            <div class="amt small" style="text-align:right">${d.months == null ? "—" : monthYear(d.months)}<div class="tiny muted">${b?.months != null && d.months != null && b.months > d.months ? `EMIs alone: ${monthYear(b.months)}` : yrsMo(d.months)}</div></div></div>
+          <div class="bar" data-tip="${esc(d.name)}|closes ${d.months == null ? "never" : monthYear(d.months)}${b?.months ? ` · EMIs alone ${monthYear(b.months)}` : ""}"><span style="width:${d.months == null ? 100 : Math.max(2, (d.months / maxM) * 100)}%;background:var(--c-6)"></span></div></div>`;
+      }).join("");
+    }
+    // scenario table: today, break-even, your target, and higher incomes
+    const targetIncome = Math.round(est.targetMonthly || 0);
+    const levels = [["Today", income0], ["Covers all payments", est.costs], ["Your target", targetIncome], ["Today + 25%", income0 * 1.25], ["Today + 50%", income0 * 1.5], ["Target + 25%", targetIncome * 1.25], ["Target × 2", targetIncome * 2]]
+      .map(([l, v]) => [l, Math.ceil(v / 100000) * 100000]).filter(([, v]) => v > 0)
+      .filter(([, v], i, a) => a.findIndex(([, w]) => w === v) === i).sort((a, b) => a[1] - b[1]);
+    $("#dp-table", card).innerHTML = levels.map(([label, v]) => {
+      const r = run(v), mine = Math.abs(v - income) < 50000;
+      return `<tr class="${mine ? "mine" : ""}" tabindex="0" data-income="${v / 100}"><td><b class="tnum">${rupees(v)}</b><div class="tiny muted">${label}</div></td><td class="tnum">${rupees(v * 12 / 365)}</td>
+        <td class="tnum ${r.spare >= 0 ? "up" : "down"}">${r.spare >= 0 ? "" : "−"}${rupees(Math.abs(r.spare))}</td>
+        <td>${debts.length ? (r.debtMonths == null ? "—" : monthYear(r.debtMonths)) : "Done"}</td><td>${r.freedomMonths == null ? "—" : monthYear(r.freedomMonths)}</td></tr>`;
     }).join("");
+    card.querySelectorAll("#dp-table tr").forEach((tr) => tr.addEventListener("click", () => { $("#dp-income", card).value = tr.dataset.income; sync(); }));
   };
+  const range = $("#dp-range", card), box = $("#dp-income", card);
+  const sync = () => { range.value = nearestStep(INCOME_STEPS, Number(box.value) || 0); draw(); };
+  range.addEventListener("input", () => { box.value = INCOME_STEPS[Number(range.value)]; draw(); });
+  box.addEventListener("input", sync);
   card.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click", () => {
     strategy = b.dataset.strategy; card.querySelectorAll("[data-strategy]").forEach((x) => x.classList.toggle("active", x === b)); draw();
   }));
-  const range = $("#dp-range", card), num = $("#dp-num", card);
-  range.addEventListener("input", () => { extraDay = WI_STEPS[Number(range.value)] * 100; num.value = extraDay / 100; draw(); });
-  num.addEventListener("input", () => {
-    const v = Math.min(Math.max(Number(num.value) || 0, 0), 1000000);
-    range.value = WI_STEPS.reduce((best, step, i) => (Math.abs(step - v) < Math.abs(WI_STEPS[best] - v) ? i : best), 0);
-    extraDay = v * 100; draw();
-  });
   draw();
 }
 
@@ -643,14 +664,21 @@ async function viewHome(main) {
   const t = h.target, f0 = h.freedom;
   // No investments yet? Estimate the date from income minus costs instead of showing "—".
   const est = estimateFreedom(f0, t, monthlyAverages(monthRows));
-  const estimated = f0.years == null && est.ok;
-  const f = estimated ? { ...f0, years: est.years, freedom_date: isoOf(est.date), ...{ freedom_invest_monthly_paise: est.effective.freedom_invest_monthly_paise } } : f0;
+  const homeDebts = loanDebts(homeLoans);
+  const fc = est.income > 0 ? forecast({ freedom: f0, debts: homeDebts, income: est.income, costs: est.costs }) : null;
+  const estimated = f0.years == null && fc?.freedomMonths != null;
+  const f = estimated ? { ...f0, years: Math.round(fc.freedomMonths / 1.2) / 10, freedom_date: isoOf(addMonths(fc.freedomMonths)) } : f0;
   const freedomNote = f0.fi_number_paise <= 0 ? ""
-    : estimated ? `<div class="small text-2" style="margin-top:10px">Estimated from your numbers: income <b class="tnum">${rupees(est.income)}</b>/month − costs <b class="tnum">${rupees(est.costs)}</b>/month = <b class="tnum up">${rupees(est.surplus)}</b>/month you could invest <span class="muted">(${esc(est.basis)})</span>. Add investments in Goals for an exact date.</div>`
+    : estimated ? `<div class="small text-2" style="margin-top:10px">Estimated from your numbers: income <b class="tnum">${rupees(est.income)}</b>/month − payments <b class="tnum">${rupees(est.costs)}</b>/month = <b class="tnum ${fc.spare >= 0 ? "up" : "down"}">${fc.spare >= 0 ? "" : "−"}${rupees(Math.abs(fc.spare))}</b>/month spare <span class="muted">(${esc(est.basis)})</span>.
+        ${homeDebts.length ? `Spare money first clears your loans (debt-free ${fc.debtMonths ? monthYear(fc.debtMonths) : "now"}), then it and the finished EMIs are invested.` : "It is invested each month."} <a class="linkish" href="#/dues">See forecast</a></div>`
     : f0.years == null ? (est.income <= 0
         ? `<div class="small text-2" style="margin-top:10px">Add your income in <a class="linkish" href="#/money">Money</a> and your investments in <a class="linkish" href="#/grow">Goals</a> to see your Freedom date.</div>`
-        : `<div class="small" style="margin-top:10px"><span class="chip warn">${ICON.alert}Not reachable yet</span> Your costs <b class="tnum">${rupees(est.costs)}</b>/month are more than your income <b class="tnum">${rupees(est.income)}</b>/month <span class="muted">(${esc(est.basis)})</span>. Earn <b class="tnum">${rupees(est.shortfall)}</b>/month more (<b class="tnum">${rupees(est.shortfall * 12 / 365)}</b>/day) to start building freedom, or use the slider to see what extra earning does.</div>`)
-    : est.ok ? `<div class="small text-2" style="margin-top:10px">Also investing your monthly surplus of <b class="tnum up">${rupees(est.surplus)}</b> would bring it to <b>${fmtDate(isoOf(est.date), { month: "short", year: "numeric" })}</b>.</div>` : "";
+        : (() => {
+            const need = fc ? Math.max(0, -(fc.spare + fc.emiTotal)) : est.shortfall;   // after loans end, their EMIs are free too
+            return `<div class="small" style="margin-top:10px"><span class="chip warn">${ICON.alert}Not reachable yet</span> Your payments <b class="tnum">${rupees(est.costs)}</b>/month are more than your income <b class="tnum">${rupees(est.income)}</b>/month <span class="muted">(${esc(est.basis)})</span>.
+              Earn <b class="tnum">${rupees(need)}</b>/month more (<b class="tnum">${rupees(need * 12 / 365)}</b>/day) to start investing${homeDebts.length ? ` once your loans end, or <b class="tnum">${rupees(est.shortfall)}</b>/month more to also clear them faster` : ""}. <a class="linkish" href="#/dues">See forecast</a></div>`;
+          })())
+    : fc?.freedomMonths != null && fc.freedomMonths < Math.round(f0.years * 12) ? `<div class="small text-2" style="margin-top:10px">Using your spare money and finished EMIs too would bring it to <b>${monthYear(fc.freedomMonths)}</b>. <a class="linkish" href="#/dues">See forecast</a></div>` : "";
   const empty = !t || t.monthly_paise === 0;
   const weekPct = pct(h.earned_this_week_paise, t.weekly_paise);
   const duesTotal = h.dues_7d.reduce((s, d) => s + d.amount_paise, 0);
@@ -755,6 +783,12 @@ async function viewHome(main) {
     if (!extra) { out.innerHTML = "Move the slider or type an amount to see your new freedom date."; return; }
     // extra earning first covers any gap between costs and income; the rest is invested
     const investPerDay = useSurplus ? est.surplus * 12 / 365 + extra : extra;
+    if (useSurplus && est.income > 0) {
+      const g = forecast({ freedom: f0, debts: homeDebts, income: est.income + extra * 365 / 12, costs: est.costs });
+      out.innerHTML = g.freedomMonths == null ? `Not enough yet: earn <b class="tnum">${rupees(-(g.spare + g.emiTotal) * 12 / 365)}</b>/day more to start investing after your loans end.`
+        : `Earning <b class="tnum">${rupees(extra * 365 / 12)}</b>/month more: ${homeDebts.length ? `debt-free <b>${g.debtMonths ? monthYear(g.debtMonths) : "now"}</b>, ` : ""}freedom <b>${monthYear(g.freedomMonths)}</b>${f.years != null && g.freedomMonths < f.years * 12 ? ` · <b class="up">${yrsMo(Math.round(f.years * 12) - g.freedomMonths)} sooner</b>` : ""}`;
+      return;
+    }
     if (investPerDay <= 0) {
       out.innerHTML = `That covers part of your gap. Earn <b class="tnum">${rupees(-investPerDay)}</b>/day more to cover your costs and start investing.`;
       return;
@@ -840,7 +874,7 @@ async function viewDues(main) {
   setTitle("Dues", "Bills, EMIs and card payments");
   const [rawDues, bills, loans, cards, duesHome, duesMonths] = await Promise.all([api.dues(30), api.bills(), api.loans(), api.cards(),
     api.home().catch(() => null), api.months().catch(() => [])]);
-  const duesEst = duesHome ? estimateFreedom(duesHome.freedom, duesHome.target, monthlyAverages(duesMonths)) : null;
+  const duesEst = duesHome ? { ...estimateFreedom(duesHome.freedom, duesHome.target, monthlyAverages(duesMonths)), targetMonthly: duesHome.target.monthly_paise } : null;
   const dues = await api.withBillIds(rawDues).catch(() => rawDues);
   const late = dues.filter((d) => daysFrom(d.due_date) < 0 || d.status === "overdue");
   const week = dues.filter((d) => !late.includes(d) && daysFrom(d.due_date) <= 7);
@@ -878,7 +912,7 @@ async function viewDues(main) {
     </div>`;
   bindPay(main);
   bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
-  bindDebtPlan(main, loans, duesEst);
+  bindDebtPlan(main, loans, duesEst, duesHome?.freedom);
 
   const nonIncome = cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
   $("#add-bill", main).addEventListener("click", () => formSheet("Add a regular bill", [

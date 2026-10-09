@@ -165,6 +165,31 @@ export function debtPlan(debts, extraMonthly = 0, strategy = "avalanche", { roll
   return { months: reachable ? Math.max(...list.map((d) => d.closed)) : null, interest: Math.round(totalInterest), reachable,
     debts: list.map((d) => ({ id: d.id, name: d.name, balance: d.balance, rate: d.rate, payment: d.payment, months: d.closed, interest: Math.round(d.interest) })) };
 }
+// Full forecast for one monthly income.
+// Phase 1: every loan pays its EMI; spare money (income − costs) and closed loans' EMIs go to the loans.
+// Phase 2: once debt-free, spare money + all the EMIs that ended are invested, growing at the real return.
+// costs already include the EMIs. Returns months until debt-free and until financial freedom (null = not reachable).
+export function forecast({ freedom, debts, income, costs, strategy = "avalanche", maxMonths = 1200 }) {
+  const spare = income - costs;
+  const sipWanted = freedom.freedom_invest_monthly_paise || 0;
+  const sip = Math.min(sipWanted, Math.max(0, spare));      // SIPs only continue if the spare money covers them
+  const plan = debtPlan(debts, Math.max(0, spare - sip), strategy);
+  const debtMonths = plan.reachable ? plan.months : null;
+  const emiTotal = debts.filter((d) => d.balance > 0).reduce((s, d) => s + d.payment, 0);
+  const fi = freedom.fi_number_paise;
+  const rm = Math.pow(1 + (freedom.real_return_pct || 0) / 100, 1 / 12) - 1;
+  let corpus = freedom.corpus_paise || 0, freedomMonths = null;
+  if (fi > 0 && corpus >= fi) freedomMonths = 0;
+  else if (fi > 0 && debtMonths != null) {
+    const afterDebt = Math.max(0, spare + emiTotal);       // includes the SIP money
+    for (let m = 1; m <= maxMonths; m++) {
+      corpus = corpus * (1 + rm) + (m > debtMonths ? afterDebt : sip);
+      if (corpus >= fi) { freedomMonths = m; break; }
+    }
+  }
+  return { income, costs, spare, sip, sipWanted, emiTotal, debtMonths, freedomMonths, plan };
+}
+
 export const addMonths = (n, from = new Date()) => { const d = new Date(from.getFullYear(), from.getMonth() + n, 1); return d; };
 
 export function nextDayOfMonth(day, from) {
