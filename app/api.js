@@ -139,11 +139,24 @@ async function supabaseApi({ SUPABASE_URL, SUPABASE_ANON_KEY, LOGIN_VIA_FUNCTION
       .eq("household_id", hid).eq("txn_date", t.txn_date).eq("id", t.id)),
     updateLoan: async (id, f) => must(await sb.from("loans").update(f).eq("id", id)),
     deleteLoan: async (id) => must(await sb.from("loans").delete().eq("id", id)),
-    async updateBill(id, f) {
+    // opts.reopen: the chosen date was already paid; undo that payment so it is due again
+    async updateBill(id, f, opts = {}) {
       must(await sb.from("recurring_bills").update(f).eq("id", id));
       // rebuild the upcoming dues so a new amount or date shows straight away (paid/overdue ones stay)
       must(await sb.from("bill_occurrences").delete().eq("bill_id", id).eq("status", "due").gte("due_date", iso(new Date())));
+      // a skipped (or reopened paid) due on the chosen date would block the new one
+      const old = await this.billOccurrenceOn(id, f.next_due_date);
+      if (old && (old.status === "skipped" || (old.status === "paid" && opts.reopen))) {
+        if (old.status === "paid" && old.transaction_id && old.paid_on)
+          must(await sb.from("transactions").delete().eq("household_id", hid).eq("txn_date", old.paid_on).eq("id", old.transaction_id));
+        must(await sb.from("bill_occurrences").delete().eq("id", old.id));
+      }
       await rpc("roll_bill_occurrences", { p_household: hid });
+    },
+    async billOccurrenceOn(billId, date) {
+      if (!date) return null;
+      const rows = must(await sb.from("bill_occurrences").select("id,status,paid_on,transaction_id").eq("bill_id", billId).eq("due_date", date).limit(1));
+      return rows[0] ?? null;
     },
     deleteBill: async (id) => must(await sb.from("recurring_bills").delete().eq("id", id)),
     // the date the edit form should show: the earliest unpaid upcoming due, else the stored next date
@@ -399,9 +412,11 @@ function demoApi() {
     updateTransaction: async (t, f) => Object.assign(s.txns.find((x) => x.id === t.id), f),
     updateLoan: async (lId, f) => Object.assign(s.loans.find((x) => x.id === lId), f),
     deleteLoan: async (lId) => { s.loans = s.loans.filter((x) => x.id !== lId); },
-    async updateBill(bId, f) {
+    async updateBill(bId, f, opts = {}) {
       const b = Object.assign(s.bills.find((x) => x.id === bId), f);
       s.occurrences = s.occurrences.filter((o) => !(o.bill_id === bId && o.status === "due" && o.due_date >= iso(today)));
+      s.occurrences = s.occurrences.filter((o) => !(o.bill_id === bId && o.due_date === f.next_due_date
+        && (o.status === "skipped" || (o.status === "paid" && opts.reopen))));
       let due = new Date(b.next_due_date);
       while (due <= addDays(today, 35)) {
         if (!s.occurrences.some((o) => o.bill_id === bId && o.due_date === iso(due))) s.occurrences.push({ id: id(), bill_id: bId, due_date: iso(due), amount_paise: b.amount_paise, status: "due" });
@@ -409,6 +424,7 @@ function demoApi() {
       }
       b.next_due_date = iso(due);
     },
+    billOccurrenceOn: async (bId, date) => s.occurrences.find((o) => o.bill_id === bId && o.due_date === date) ?? null,
     billNextOpen: async (bill) => s.occurrences.filter((o) => o.bill_id === bill.id && o.status === "due" && o.due_date >= iso(today))
       .map((o) => o.due_date).sort()[0] ?? bill.next_due_date,
     deleteBill: async (bId) => { s.bills = s.bills.filter((x) => x.id !== bId); s.occurrences = s.occurrences.filter((o) => o.bill_id !== bId); },
