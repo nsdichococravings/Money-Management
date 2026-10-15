@@ -1036,7 +1036,13 @@ async function viewDues(main) {
       <section class="card"><div class="card-head"><h2>Credit cards</h2></div><div class="list">${cards.length ? cards.map((c) => `<div class="item">${tile(ICON.card, "var(--c-2)")}<div class="grow"><div class="title">${esc(c.issuer)} ••${esc(c.last4)}</div>
         <div class="meta">Statement day ${c.statement_day} · due day ${c.due_day}</div></div><div class="amt tnum small">${compact(c.credit_limit_paise)}<div class="tiny muted">limit</div></div>${editBtn("card", c.id, "Edit card")}</div>`).join("") : `<div class="empty">No cards added</div>`}</div></section>
       <section class="card"><div class="card-head"><h2>Regular bills</h2></div><div class="list">${bills.length ? bills.map((b) => `<div class="item">${tile(ICON.bill, "var(--c-1)")}<div class="grow"><div class="title">${esc(b.name)}</div>
-        <div class="meta">${freqLabel[b.frequency]}${b.autopay ? " · autopay" : ""}</div></div><div class="amt tnum">${rupees(b.amount_paise)}</div>${editBtn("bill", b.id, "Edit bill")}</div>`).join("") : `<div class="empty">No bills added</div>`}</div></section>
+        <div class="meta">${freqLabel[b.frequency]}${b.autopay ? " · autopay" : ""} · ${(() => {
+          // the earliest unpaid due of this bill; if none is open in the next 30 days, the next one to be created
+          const open = dues.filter((d) => d.type === "bill" && d.bill_id === b.id).map((d) => d.due_date).sort()[0];
+          const next = open || b.next_due_date;
+          const n = daysFrom(next);
+          return open && n <= 0 ? `<span class="chip ${n < 0 ? "bad" : "warn"}">${n < 0 ? "overdue " : "due today "}${fmtDate(next)}</span>` : `next ${fmtDate(next)}`;
+        })()}</div></div><div class="amt tnum">${rupees(b.amount_paise)}</div>${editBtn("bill", b.id, "Edit bill")}</div>`).join("") : `<div class="empty">No bills added</div>`}</div></section>
     </div>`;
   bindPay(main);
   bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
