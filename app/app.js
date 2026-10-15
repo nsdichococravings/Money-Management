@@ -181,10 +181,18 @@ const EDITORS = {
       { name: "category_id", label: "Category", type: "select", options: spendCategoryOptions(), value: b.category_id },
       [{ name: "next_due_date", label: "Next due date", type: "date", required: true, value: next },
        { name: "autopay", label: "Autopay?", type: "select", options: [["false", "No"], ["true", "Yes"]], value: String(!!b.autopay) }],
-    ], "Save changes", (v) => api.updateBill(b.id, {
-      name: v.name.trim(), amount_paise: moneyOk(v.amount, "an amount"), frequency: v.frequency, category_id: Number(v.category_id),
-      next_due_date: v.next_due_date, due_day: new Date(v.next_due_date).getDate(), autopay: v.autopay === "true",
-    }), { onDelete: () => api.deleteBill(b.id), deleteLabel: "Delete bill", deleteText: `Delete "${b.name}" and its upcoming dues? Past payments stay in your transactions.` });
+    ], "Save changes", async (v) => {
+      const f = { name: v.name.trim(), amount_paise: moneyOk(v.amount, "an amount"), frequency: v.frequency, category_id: Number(v.category_id),
+        next_due_date: v.next_due_date, due_day: Number(v.next_due_date.slice(8, 10)), autopay: v.autopay === "true" };
+      // the chosen date may already be marked paid; ask before undoing that payment
+      const old = await api.billOccurrenceOn(b.id, v.next_due_date);
+      let reopen = false;
+      if (old?.status === "paid") {
+        reopen = confirm(`${b.name} for ${fmtDate(v.next_due_date)} is already marked paid${old.paid_on ? ` (on ${fmtDate(old.paid_on)})` : ""}.\n\nMark it as not paid so it shows as due again? This removes that payment from your transactions.`);
+        if (!reopen) toast(`${fmtDate(v.next_due_date)} stays paid. The next due after it is kept.`);
+      }
+      await api.updateBill(b.id, f, { reopen });
+    }, { onDelete: () => api.deleteBill(b.id), deleteLabel: "Delete bill", deleteText: `Delete "${b.name}" and its upcoming dues? Past payments stay in your transactions.` });
   },
 
   card: (c) => formSheet(`Edit ${c.issuer} ••${c.last4}`, [
@@ -1057,7 +1065,7 @@ async function viewDues(main) {
     [{ name: "next_due_date", label: "Next due date", type: "date", required: true, value: todayIso() },
      { name: "autopay", label: "Autopay?", type: "select", options: [["false", "No"], ["true", "Yes"]] }],
   ], "Add bill", (v) => api.addBill({ name: v.name, amount_paise: toPaise(v.amount), frequency: v.frequency, category_id: Number(v.category_id),
-    next_due_date: v.next_due_date, due_day: new Date(v.next_due_date).getDate(), autopay: v.autopay === "true" })));
+    next_due_date: v.next_due_date, due_day: Number(v.next_due_date.slice(8, 10)), autopay: v.autopay === "true" })));
 
   $("#add-loan", main).addEventListener("click", () => formSheet("Add a loan / EMI", [
     [{ name: "loan_type", label: "Type", type: "select", options: [["home", "Home"], ["car", "Car"], ["personal", "Personal"], ["education", "Education"], ["gold", "Gold"], ["business", "Business"], ["other", "Other"]] },
