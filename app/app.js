@@ -77,20 +77,63 @@ const BUCKET = {
 const TYPE = { bill: { icon: ICON.bill, color: "var(--c-1)" }, emi: { icon: ICON.emi, color: "var(--c-6)" }, card: { icon: ICON.card, color: "var(--c-2)" } };
 const tile = (icon, color = "var(--accent)") => `<div class="tile" style="--tile:${color}">${icon}</div>`;
 
-function toast(msg) {
+const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+// a short tap of the phone's vibration motor (ignored where not supported)
+const haptic = (ms = 12) => { try { if (!reducedMotion()) navigator.vibrate?.(ms); } catch { /* not supported */ } };
+
+// kind: "good" (done), "bad" (problem) or "info"
+function toast(msg, kind = "good") {
+  document.querySelectorAll(".toast").forEach((old) => old.remove());
   const t = document.createElement("div");
-  t.className = "toast"; t.textContent = msg; t.setAttribute("role", "status");
+  const icon = kind === "bad" ? ICON.alert : kind === "info" ? ICON.bulb : ICON.check;
+  t.className = `toast ${kind}`; t.setAttribute("role", "status");
+  t.innerHTML = `${icon}<span>${esc(msg)}</span>`;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 2600);
+  if (kind === "good") haptic(); else if (kind === "bad") haptic([20, 60, 20]);
+  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 300); }, 2600);
 }
 
 function sheet(title, html, onMount) {
+  const opener = document.activeElement;
   const wrap = document.createElement("div");
   wrap.className = "sheet-backdrop";
   wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="grip"></div><h3>${esc(title)}</h3>${html}</div>`;
-  const close = () => { wrap.remove(); document.removeEventListener("keydown", onKey); };
-  const onKey = (e) => { if (e.key === "Escape") close(); };
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    document.removeEventListener("keydown", onKey);
+    const done = () => { wrap.remove(); if (opener?.isConnected && !document.querySelector(".sheet-backdrop")) opener.focus?.({ preventScroll: true }); };
+    if (reducedMotion()) return done();
+    wrap.classList.add("closing"); wrap.style.pointerEvents = "none";
+    setTimeout(done, 200);
+  };
+  // Escape closes; Tab stays inside the sheet so keyboard users never get lost behind it
+  const onKey = (e) => {
+    if (wrap !== [...document.querySelectorAll(".sheet-backdrop:not(.closing)")].pop()) return;
+    if (e.key === "Escape") return close();
+    if (e.key !== "Tab") return;
+    const f = [...wrap.querySelectorAll("a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex='-1'])")].filter((el) => el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  };
   wrap.addEventListener("click", (e) => { if (e.target === wrap) close(); });
+  // swipe the sheet down to close it (phones)
+  const sh = wrap.querySelector(".sheet");
+  let y0 = null;
+  sh.addEventListener("touchstart", (e) => { y0 = sh.scrollTop <= 0 && !e.target.closest("input,select,textarea,button,.pin-pad") ? e.touches[0].clientY : null; }, { passive: true });
+  sh.addEventListener("touchmove", (e) => {
+    if (y0 == null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (dy > 0) { sh.style.transform = `translateY(${dy}px)`; sh.style.transition = "none"; }
+  }, { passive: true });
+  sh.addEventListener("touchend", (e) => {
+    if (y0 == null) return;
+    const dy = e.changedTouches[0].clientY - y0; y0 = null;
+    sh.style.transition = "transform .25s ease";
+    if (dy > 110) { sh.style.transform = "translateY(100%)"; close(); } else sh.style.transform = "";
+  });
   document.addEventListener("keydown", onKey);
   document.body.appendChild(wrap);
   onMount?.(wrap.querySelector(".sheet"), close);
@@ -125,21 +168,22 @@ function formSheet(title, fields, submitLabel, onSubmit, opts = {}) {
       if (!confirm(opts.deleteText || "Delete this? This cannot be undone.")) return;
       const err = $(".error", form);
       e.currentTarget.disabled = true;
-      try { await opts.onDelete(); close(); toast(opts.deletedToast || "Deleted"); render(); }
+      try { await opts.onDelete(); close(); toast(opts.deletedToast || "Deleted", "info"); render(); }
       catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); e.currentTarget.disabled = false; }
     });
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = $("button[type=submit]", form), err = $(".error", form);
       const values = Object.fromEntries(new FormData(form).entries());
-      btn.disabled = true; err.classList.add("hidden");
+      btn.disabled = true; btn.classList.add("is-busy"); err.classList.add("hidden");
       try {
         await onSubmit(values);
         close();
+        haptic();
         render();
       } catch (ex) {
-        err.textContent = ex.message; err.classList.remove("hidden");
-      } finally { btn.disabled = false; }
+        err.textContent = ex.message; err.classList.remove("hidden"); haptic([20, 60, 20]);
+      } finally { btn.disabled = false; btn.classList.remove("is-busy"); }
     });
   });
 }
@@ -217,7 +261,7 @@ const EDITORS = {
     sheetEl?.insertAdjacentHTML("beforeend", `<button type="button" class="btn ghost block" data-edit-card style="margin-top:10px">${ICON.card} Edit card details</button>`);
     sheetEl?.querySelector("[data-edit-card]")?.addEventListener("click", async () => {
       const card = (await api.cards()).find((c) => c.id === s0.card_id);
-      if (!card) return toast("Card not found");
+      if (!card) return toast("Card not found", "bad");
       document.querySelector(".sheet-backdrop")?.remove();
       EDITORS.card(card);
     });
@@ -568,6 +612,7 @@ async function render() {
   const view = views[r] || viewHome;
   const root = $("#root");
   if (!$(".app", root)) {
+    lastRoute = null;
     root.innerHTML = `<div class="app">
       <aside class="sidebar" aria-label="Main">${BRAND}
         ${TABS.map(([k, l]) => `<a class="nav" href="#/${k}" data-tab="${k}">${ICON[k]}<span>${l}</span></a>`).join("")}
@@ -593,13 +638,59 @@ async function render() {
   document.querySelectorAll("[data-tab]").forEach((a) => a.classList.toggle("active", a.dataset.tab === r));
   $("#fab").classList.toggle("hidden", r === "ai" || r === "settings");
   const main = $("#view");
+  const fresh = r !== lastRoute; lastRoute = r;
+  main.classList.remove("enter");
   main.innerHTML = skeleton();
   try {
     await view(main);
+    if (fresh) { void main.offsetWidth; main.classList.add("enter"); if (scrollY > 0) scrollTo({ top: 0 }); }
+    countStats(main);
   } catch (ex) {
     console.error(ex);
-    main.innerHTML = `<div class="card error">Something went wrong: ${esc(ex.message)}</div>`;
+    main.innerHTML = `<div class="card stack" style="text-align:center;justify-items:center;padding:32px 18px">${tile(ICON.alert, "var(--bad)")}
+      <div><b>We couldn't load this page</b><div class="small muted" style="margin-top:4px">${esc(ex.message)}</div></div>
+      <button class="btn ghost small" id="retry">Try again</button></div>`;
+    $("#retry", main)?.addEventListener("click", () => render());
   }
+}
+let lastRoute = null;
+
+// whole-rupee stat values count up from zero when a page opens
+function countStats(root) {
+  root.querySelectorAll(".stat .value").forEach((el) => {
+    const m = el.textContent.trim().match(/^(-?)₹([\d,]+)$/);
+    if (!m) return;
+    const paise = Number(m[2].replace(/,/g, "")) * 100 * (m[1] ? -1 : 1);
+    countUp(el, paise, rupees, 650);
+  });
+}
+
+// app-wide touches: light that follows the pointer on cards, top bar depth on scroll, offline notice
+function installInteractions() {
+  document.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const c = e.target.closest?.(".card,.stat,.due-card");
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    c.style.setProperty("--mx", `${e.clientX - r.left}px`);
+    c.style.setProperty("--my", `${e.clientY - r.top}px`);
+  }, { passive: true });
+  let ticking = false;
+  addEventListener("scroll", () => {
+    if (ticking) return; ticking = true;
+    requestAnimationFrame(() => { document.querySelector(".topbar")?.classList.toggle("scrolled", scrollY > 8); ticking = false; });
+  }, { passive: true });
+  const net = () => {
+    document.querySelector(".net-banner")?.remove();
+    if (navigator.onLine) return;
+    const b = document.createElement("div");
+    b.className = "net-banner"; b.setAttribute("role", "status");
+    b.innerHTML = `${ICON.alert.replace("<svg", '<svg width="15" height="15"')}You're offline. Changes won't save yet.`;
+    document.body.appendChild(b);
+  };
+  addEventListener("offline", net);
+  addEventListener("online", () => { net(); if (user && !locked) { toast("Back online", "info"); render(); } });
+  net();
 }
 
 const skeleton = () => `<div class="grid g-hero"><div class="skel" style="height:230px"></div><div class="skel" style="height:230px"></div></div>
@@ -628,24 +719,30 @@ function quickAdd(kind = "expense") {
       const v = Object.fromEntries(new FormData(form).entries());
       const amt = toPaise(v.amount);
       const err = $(".error", form);
-      if (amt <= 0) { err.textContent = "Enter an amount more than zero."; err.classList.remove("hidden"); return; }
+      if (amt <= 0) { err.textContent = "Enter an amount more than zero."; err.classList.remove("hidden"); form.amount.focus(); return; }
+      const btn = $("button[type=submit]", form); btn.disabled = true; btn.classList.add("is-busy");
       try {
         await api.addTransaction({ account_id: v.account_id, txn_date: v.txn_date, amount_paise: kind === "income" ? amt : -amt,
           category_id: Number(v.category_id), merchant: v.merchant || null, source: "manual" });
         close(); toast(kind === "income" ? "Income added" : "Expense added"); render();
-      } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); }
+      } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); } finally { btn.disabled = false; btn.classList.remove("is-busy"); }
     });
   });
 }
 
-function payDue(due) {
+function payDue(due, row) {
   const accs = accountOptions((a) => ["bank", "cash", "wallet"].includes(a.kind));
   sheet(`Pay ${due.name}`, `<div class="row" style="margin:-6px 0 14px"><span class="big tnum">${rupees(due.amount_paise)}</span>${statusChip(due)}</div>
     ${formHtml([{ name: "account", label: "Paid from", type: "select", options: accs, required: true }], "Mark as paid")}`, (root, close) => {
     $("form", root).addEventListener("submit", async (e) => {
       e.preventDefault();
-      try { await api.payDue(due, e.target.account.value); close(); toast("Marked as paid"); render(); } catch (ex) {
+      const btn = $("button[type=submit]", root); btn.disabled = true; btn.classList.add("is-busy");
+      try {
+        await api.payDue(due, e.target.account.value); close(); toast("Marked as paid");
+        if (row && !reducedMotion()) { row.classList.add("is-paid"); setTimeout(render, 420); } else render();
+      } catch (ex) {
         const err = $(".error", root); err.textContent = ex.message; err.classList.remove("hidden");
+        btn.disabled = false; btn.classList.remove("is-busy");
       }
     });
   });
@@ -676,7 +773,7 @@ function dueCard(d) {
     <div><div class="title" style="font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.name)}</div><div class="tiny muted">Due ${fmtDate(d.due_date)}</div></div>
     <div class="row"><span class="mid tnum">${rupees(d.amount_paise)}</span><span class="btn-row" style="flex-wrap:nowrap">${payBtn(d)}${dueEditBtn(d)}</span></div></div>`;
 }
-function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay)))); }
+function bindPay(root) { root.querySelectorAll("[data-pay]").forEach((b) => b.addEventListener("click", () => payDue(JSON.parse(b.dataset.pay), b.closest(".item,.due-card")))); }
 
 // ---------------------------------------------------------------------------
 // Debt-free plan (Dues page card + Home summary)
@@ -1327,7 +1424,7 @@ async function viewSettings(main) {
   $("#pin-set", main)?.addEventListener("click", () => pinSetupSheet());
   $("#pin-change", main)?.addEventListener("click", () => pinSetupSheet("Change app PIN"));
   $("#pin-lock", main)?.addEventListener("click", lockNow);
-  $("#pin-off", main)?.addEventListener("click", () => { if (confirm("Turn off the app PIN? You'll stay signed in on this device.")) { store.del(pinKey()); toast("PIN turned off"); render(); } });
+  $("#pin-off", main)?.addEventListener("click", () => { if (confirm("Turn off the app PIN? You'll stay signed in on this device.")) { store.del(pinKey()); toast("PIN turned off", "info"); render(); } });
   $("#lock-after", main)?.addEventListener("change", (e) => { store.set("fd-lock-after", Number(e.target.value)); toast("Saved"); });
   $("#out-all", main).addEventListener("click", () => { if (confirm("Sign out on every phone and computer?")) api.signOut(true); });
 }
@@ -1358,6 +1455,7 @@ async function start() {
   applyTheme();
   matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => { if (getTheme() === "system") applyTheme("system"); });
   installTooltips();
+  installInteractions();
   api = await createApi(config);
   // supabase-js holds a lock while it runs this callback; calling it again from inside
   // (as onSignedIn does) would wait forever. setTimeout runs the work after the lock is released.
