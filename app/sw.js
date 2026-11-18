@@ -1,5 +1,5 @@
 // FreedomDay service worker: the app shell works offline; money data always comes fresh from the network.
-const CACHE = "freedomday-v5";
+const CACHE = "freedomday-v6";
 const SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./api.js", "./engine.js", "./charts.js", "./config.js", "./manifest.json", "./icon.svg", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
