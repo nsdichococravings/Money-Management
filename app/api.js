@@ -203,6 +203,7 @@ function demoApi() {
 
   const CATS = [
     ["Salary", "income"], ["Business income", "income"], ["Other income", "income"],
+    ["Business loss", "loss"], ["Trading loss", "loss"], ["Other loss", "loss"],
     ["Rent", "fixed"], ["EMI", "fixed"], ["Electricity", "fixed"], ["Mobile & internet", "fixed"], ["Insurance", "fixed"], ["Subscriptions", "fixed"],
     ["School fees", "kids"], ["Tuition & classes", "kids"], ["School transport", "kids"],
     ["Groceries", "daily"], ["Milk & vegetables", "daily"], ["Fuel", "daily"], ["Medicine", "daily"],
@@ -272,7 +273,19 @@ function demoApi() {
 
   const sortByDateDesc = (a, b) => (b.txn_date + b.id).localeCompare(a.txn_date + a.id);
   const loanNext = (l) => nextDayOfMonth(l.emi_day, addDays(new Date(l.paid_through), 1));
-  const daySpend = (from) => s.txns.filter((t) => new Date(t.txn_date) >= from && CATS.find((c) => c.id === t.category_id)?.bucket !== "transfer");
+  const bucketOf = (t) => CATS.find((c) => c.id === t.category_id)?.bucket;
+  const daySpend = (from) => s.txns.filter((t) => new Date(t.txn_date) >= from && bucketOf(t) !== "transfer");
+  // same rule as fin.apply_rollup: a loss (saved negative) comes off income and is not spending
+  const isIncome = (t) => t.amount_paise > 0 || bucketOf(t) === "loss";
+  const isSpend = (t) => !isIncome(t);
+  const byDay = (from) => {
+    const by = {};
+    daySpend(from).forEach((t) => {
+      by[t.txn_date] ??= { day: t.txn_date, income_paise: 0, expense_paise: 0 };
+      if (isIncome(t)) by[t.txn_date].income_paise += t.amount_paise; else by[t.txn_date].expense_paise -= t.amount_paise;
+    });
+    return Object.values(by);
+  };
 
   const api = {
     demo: true,
@@ -295,9 +308,9 @@ function demoApi() {
         household: { id: s.household.id, name: s.household.name, plan: s.household.plan_code, settings: s.household.settings },
         target,
         freedom: computeFreedom({ target, holdings: s.holdings, goals: s.goals, settings: s.household.settings }),
-        earned_this_week_paise: daySpend(monday).filter((t) => t.amount_paise > 0).reduce((a, t) => a + t.amount_paise, 0),
-        earned_this_month_paise: daySpend(monthStart).filter((t) => t.amount_paise > 0).reduce((a, t) => a + t.amount_paise, 0),
-        spent_this_month_paise: -daySpend(monthStart).filter((t) => t.amount_paise < 0).reduce((a, t) => a + t.amount_paise, 0),
+        earned_this_week_paise: daySpend(monday).filter(isIncome).reduce((a, t) => a + t.amount_paise, 0),
+        earned_this_month_paise: daySpend(monthStart).filter(isIncome).reduce((a, t) => a + t.amount_paise, 0),
+        spent_this_month_paise: -daySpend(monthStart).filter(isSpend).reduce((a, t) => a + t.amount_paise, 0),
         dues_7d: await api.dues(7),
         insights: s.insights.filter((i) => i.status === "new").slice(0, 3),
       };
@@ -319,28 +332,15 @@ function demoApi() {
       });
       return out.sort((a, b) => a.due_date.localeCompare(b.due_date) || b.amount_paise - a.amount_paise);
     },
-    async months() {
-      const from = new Date(today.getFullYear(), today.getMonth() - 3, 1);
-      const by = {};
-      daySpend(from).forEach((t) => {
-        by[t.txn_date] ??= { day: t.txn_date, income_paise: 0, expense_paise: 0 };
-        if (t.amount_paise > 0) by[t.txn_date].income_paise += t.amount_paise; else by[t.txn_date].expense_paise -= t.amount_paise;
-      });
-      return Object.values(by);
-    },
+    months: async () => byDay(new Date(today.getFullYear(), today.getMonth() - 3, 1)),
     async week() {
       const from = addDays(today, -6); from.setHours(0, 0, 0, 0);
-      const by = {};
-      daySpend(from).forEach((t) => {
-        by[t.txn_date] ??= { day: t.txn_date, income_paise: 0, expense_paise: 0 };
-        if (t.amount_paise > 0) by[t.txn_date].income_paise += t.amount_paise; else by[t.txn_date].expense_paise -= t.amount_paise;
-      });
-      return Object.values(by);
+      return byDay(from);
     },
     async monthSpend() {
       const start = new Date(today.getFullYear(), today.getMonth(), 1);
       const by = {};
-      daySpend(start).filter((t) => t.amount_paise < 0).forEach((t) => {
+      daySpend(start).filter(isSpend).forEach((t) => {
         const c = CATS.find((x) => x.id === t.category_id);
         by[c.name] ??= { category: c.name, bucket: c.bucket, spend_paise: 0, count: 0 };
         by[c.name].spend_paise -= t.amount_paise; by[c.name].count++;

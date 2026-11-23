@@ -47,6 +47,7 @@ Supabase → **SQL Editor** → New query. Paste each file and press **Run**, in
 | 8 | `0008_functions.sql` | earning target, Freedom Date, Home / Dues screens, pay a due |
 | 9 | `0009_seed.sql` | the 4 plans and the default categories |
 | 10 | `0010_cron.sql` *(optional)* | nightly jobs. First enable **pg_cron** in Database → Extensions |
+| 11 | `0011_loss.sql` | loss categories: a loss comes off what you earned, not counted as spending |
 
 Every file is safe to run again. If one fails, fix the cause and run the same file again.
 
@@ -116,7 +117,7 @@ On a local Postgres 15+ (not Supabase):
 ```bash
 createdb wp_test
 psql -d wp_test -f supabase/tests/local_supabase_stubs.sql
-for f in supabase/migrations/000*.sql; do psql -v ON_ERROR_STOP=1 -d wp_test -f "$f"; done
+for f in supabase/migrations/000*.sql supabase/migrations/0011_loss.sql; do psql -v ON_ERROR_STOP=1 -d wp_test -f "$f"; done
 psql -v ON_ERROR_STOP=1 -d wp_test -f supabase/tests/smoke_test.sql   # ends with ALL SMOKE TESTS PASSED
 ```
 

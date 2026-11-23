@@ -27,7 +27,7 @@ const todayIso = () => isoOf(new Date());
 const fmtDate = (iso, opts = { day: "numeric", month: "short" }) => iso ? new Date(iso).toLocaleDateString("en-IN", opts) : "";
 const daysFrom = (iso) => Math.round((new Date(iso) - new Date(todayIso())) / 86400000);
 const whenText = (iso) => { const n = daysFrom(iso); return n === 0 ? "Today" : n === 1 ? "Tomorrow" : n < 0 ? `${-n}d late` : `In ${n} days`; };
-const pct = (a, b) => (b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0);
+const pct = (a, b) => (b > 0 ? Math.max(0, Math.min(100, Math.round((a / b) * 100))) : 0);
 const yearsText = (y) => (y == null ? "—" : y === 0 ? "Reached!" : `${y} yrs`);
 
 const svg = (d, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
@@ -41,6 +41,7 @@ const ICON = {
   plus: svg('<path d="M12 5v14M5 12h14"/>', 'stroke-width="2.4"'),
   logo: svg('<path d="M8 20V4h10M8 12h7"/>', 'stroke-width="2.8"'),
   income: svg('<path d="M17 7 7 17M7 8v9h9"/>'),
+  loss: svg('<path d="M7 7l10 10M17 8v9H8"/>'),
   fixed: svg('<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-6h6v6"/>'),
   kids: svg('<path d="M22 10 12 5 2 10l10 5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>'),
   daily: svg('<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h7.6a2 2 0 0 0 2-1.6L21 7H6"/>'),
@@ -72,6 +73,7 @@ const BUCKET = {
   invest: { label: "Investing", color: "var(--c-5)" },
   discretionary: { label: "Lifestyle", color: "var(--c-6)" },
   income: { label: "Income", color: "var(--good-text)" },
+  loss: { label: "Loss", color: "var(--bad-text)" },
   transfer: { label: "Transfer", color: "var(--muted)" },
 };
 const TYPE = { bill: { icon: ICON.bill, color: "var(--c-1)" }, emi: { icon: ICON.emi, color: "var(--c-6)" }, card: { icon: ICON.card, color: "var(--c-2)" } };
@@ -194,7 +196,16 @@ const FREQ = { weekly: "Weekly", monthly: "Monthly", quarterly: "Every 3 months"
 const LOAN_TYPES = [["home", "Home"], ["car", "Car"], ["personal", "Personal"], ["education", "Education"], ["gold", "Gold"], ["business", "Business"], ["other", "Other"]];
 const GOAL_KINDS = [["education", "Kids' education"], ["holiday", "Holiday"], ["emergency", "Emergency fund"], ["festival", "Festival / wedding"], ["purchase", "Big purchase"], ["debt_free", "Become debt-free"], ["financial_freedom", "Financial freedom"], ["other", "Other"]];
 const ASSET_TYPES = [["equity_mf", "Equity mutual fund"], ["debt_mf", "Debt mutual fund"], ["stock", "Stocks"], ["fd", "Fixed deposit"], ["rd", "Recurring deposit"], ["ppf", "PPF"], ["epf", "EPF"], ["nps", "NPS"], ["gold", "Gold"], ["real_estate", "Real estate"], ["other", "Other"]];
-const spendCategoryOptions = () => cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, c.name]);
+const NOT_SPEND = ["income", "loss", "transfer"];
+const spendCategoryOptions = () => cache.categories.filter((c) => !NOT_SPEND.includes(c.bucket)).map((c) => [c.id, c.name]);
+// income, loss or expense: a loss is a negative amount in a 'loss' category and comes off what you earned
+const txnKind = (t) => (cache.categories.find((c) => c.id === t.category_id)?.bucket === "loss" ? "loss" : t.amount_paise > 0 ? "income" : "expense");
+const KIND = {
+  income: { title: "income", from: "From", hint: "e.g. Salary, client name", sign: 1 },
+  expense: { title: "expense", from: "Where / what", hint: "e.g. DMart, petrol, school canteen", sign: -1 },
+  loss: { title: "loss", from: "What was lost", hint: "e.g. Intraday trade, unsold stock, bad debt", sign: -1 },
+};
+const cap = (w) => w[0].toUpperCase() + w.slice(1);
 const dayOk = (v, label) => { const n = Number(v); if (!(n >= 1 && n <= 31)) throw new Error(`${label} must be between 1 and 31.`); return n; };
 const moneyOk = (v, label) => { const p = toPaise(v); if (p <= 0) throw new Error(`Enter ${label} more than zero.`); return p; };
 
@@ -291,18 +302,18 @@ const EDITORS = {
   { onDelete: () => api.deleteHolding(h.id), deleteLabel: "Delete investment" }),
 
   txn(t) {
-    const income = t.amount_paise > 0;
-    formSheet(income ? "Edit income" : "Edit expense", [
-      { name: "amount", label: "Amount", type: "money", required: true, value: rupeesIn(Math.abs(t.amount_paise)) },
-      { name: "category_id", label: "Category", type: "select", options: categoryOptions(income ? "income" : "expense"), value: t.category_id },
-      { name: "merchant", label: income ? "From" : "Where / what", value: t.merchant || "" },
+    const kind = txnKind(t), k = KIND[kind];
+    formSheet(`Edit ${k.title}`, [
+      { name: "amount", label: kind === "loss" ? "Amount lost" : "Amount", type: "money", required: true, value: rupeesIn(Math.abs(t.amount_paise)) },
+      { name: "category_id", label: "Category", type: "select", options: categoryOptions(kind), value: t.category_id },
+      { name: "merchant", label: k.from, value: t.merchant || "" },
       [{ name: "account_id", label: "Account", type: "select", options: accountOptions((a) => a.kind !== "loan" && a.kind !== "investment"), value: t.account_id },
        { name: "txn_date", label: "Date", type: "date", required: true, value: t.txn_date }],
     ], "Save changes", (v) => {
       const amt = moneyOk(v.amount, "an amount");
-      return api.updateTransaction(t, { amount_paise: income ? amt : -amt, category_id: Number(v.category_id), merchant: v.merchant || null,
+      return api.updateTransaction(t, { amount_paise: k.sign * amt, category_id: Number(v.category_id), merchant: v.merchant || null,
         account_id: v.account_id, txn_date: v.txn_date });
-    }, { onDelete: () => api.deleteTransaction(t), deleteLabel: income ? "Delete income" : "Delete expense" });
+    }, { onDelete: () => api.deleteTransaction(t), deleteLabel: `Delete ${k.title}` });
   },
 
   account: (a) => formSheet(`Edit ${a.name}`, [
@@ -325,7 +336,7 @@ function bindEdit(root, lists, extra) {
 }
 
 const categoryOptions = (kind) => cache.categories
-  .filter((c) => (kind === "income" ? c.bucket === "income" : !["income", "transfer"].includes(c.bucket)))
+  .filter((c) => (kind === "expense" ? !NOT_SPEND.includes(c.bucket) : c.bucket === kind))
   .map((c) => [c.id, c.name]);
 const accountOptions = (filter = () => true) => cache.accounts.filter(filter).map((a) => [a.id, a.name + (a.last4 ? ` ••${a.last4}` : "")]);
 
@@ -703,15 +714,16 @@ async function refreshCache() {
 }
 
 function quickAdd(kind = "expense") {
-  sheet("Quick add", `<div class="tabs" style="display:grid;grid-template-columns:1fr 1fr;margin-bottom:16px"><button data-k="expense" class="${kind === "expense" ? "active" : ""}">Expense</button><button data-k="income" class="${kind === "income" ? "active" : ""}">Income</button></div><div id="qa"></div>`, (root, close) => {
+  const k = KIND[kind];
+  sheet("Quick add", `<div class="tabs" style="display:grid;grid-template-columns:1fr 1fr 1fr;margin-bottom:16px">${["expense", "income", "loss"].map((x) => `<button data-k="${x}" class="${kind === x ? "active" : ""}">${cap(x)}</button>`).join("")}</div>${kind === "loss" ? `<p class="small text-2" style="margin:-4px 0 14px">A loss comes off what you earned. It does not count as spending.</p>` : ""}<div id="qa"></div>`, (root, close) => {
     root.querySelectorAll("[data-k]").forEach((b) => b.addEventListener("click", () => { close(); quickAdd(b.dataset.k); }));
     $("#qa", root).innerHTML = formHtml([
-      { name: "amount", label: "Amount", type: "money", required: true },
+      { name: "amount", label: kind === "loss" ? "Amount lost" : "Amount", type: "money", required: true },
       { name: "category_id", label: "Category", type: "select", options: categoryOptions(kind), required: true },
-      { name: "merchant", label: kind === "income" ? "From" : "Where / what", hint: kind === "income" ? "e.g. Salary, client name" : "e.g. DMart, petrol, school canteen" },
+      { name: "merchant", label: k.from, hint: k.hint },
       [{ name: "account_id", label: "Account", type: "select", options: accountOptions((a) => a.kind !== "loan" && a.kind !== "investment"), required: true },
        { name: "txn_date", label: "Date", type: "date", value: todayIso(), required: true }],
-    ], kind === "income" ? "Add income" : "Add expense");
+    ], `Add ${k.title}`);
     const form = $("form", root);
     form.amount.focus();
     form.addEventListener("submit", async (e) => {
@@ -722,9 +734,9 @@ function quickAdd(kind = "expense") {
       if (amt <= 0) { err.textContent = "Enter an amount more than zero."; err.classList.remove("hidden"); form.amount.focus(); return; }
       const btn = $("button[type=submit]", form); btn.disabled = true; btn.classList.add("is-busy");
       try {
-        await api.addTransaction({ account_id: v.account_id, txn_date: v.txn_date, amount_paise: kind === "income" ? amt : -amt,
+        await api.addTransaction({ account_id: v.account_id, txn_date: v.txn_date, amount_paise: k.sign * amt,
           category_id: Number(v.category_id), merchant: v.merchant || null, source: "manual" });
-        close(); toast(kind === "income" ? "Income added" : "Expense added"); render();
+        close(); toast(`${cap(k.title)} added`); render();
       } catch (ex) { err.textContent = ex.message; err.classList.remove("hidden"); } finally { btn.disabled = false; btn.classList.remove("is-busy"); }
     });
   });
@@ -912,7 +924,7 @@ async function viewHome(main) {
     const d = new Date(); d.setDate(d.getDate() - 6 + i);
     const k = isoOf(d), row = week.find((w) => String(w.day).slice(0, 10) === k);
     return { label: i === 6 ? "Today" : d.toLocaleDateString("en-IN", { weekday: "short" }), tipLabel: d.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" }),
-      value: row ? Number(row.income_paise) : 0, today: i === 6 };
+      value: row ? Math.max(0, Number(row.income_paise)) : 0, today: i === 6 };
   });
   const b = t.breakdown_paise;
   const segs = ["fixed", "kids", "daily", "sinking", "invest"].map((k) => ({ label: BUCKET[k].label, value: b[k] || 0, color: BUCKET[k].color })).filter((s) => s.value > 0);
@@ -1048,10 +1060,10 @@ async function viewMoney(main) {
     let out = "", day = lastDay;
     list.forEach((t) => {
       if (t.txn_date !== day) { day = t.txn_date; out += `<div class="day-head">${daysFrom(day) === 0 ? "Today" : daysFrom(day) === -1 ? "Yesterday" : fmtDate(day, { weekday: "short", day: "numeric", month: "short" })}</div>`; }
-      const c = catOf(t.category_id), bk = BUCKET[c?.bucket] ? c.bucket : "discretionary";
+      const c = catOf(t.category_id), bk = BUCKET[c?.bucket] ? c.bucket : "discretionary", loss = bk === "loss";
       out += `<div class="item">${tile(ICON[bk] || ICON.wallet, BUCKET[bk].color)}<div class="grow"><div class="title">${esc(t.merchant || c?.name || "Transaction")}</div>
-        <div class="meta">${esc(c?.name || "Uncategorised")}</div></div>
-        <div class="amt tnum ${t.amount_paise > 0 ? "up" : ""}">${t.amount_paise > 0 ? "+" : "−"}${rupees(Math.abs(t.amount_paise))}</div>
+        <div class="meta">${esc(c?.name || "Uncategorised")}${loss ? " · off earned" : ""}</div></div>
+        <div class="amt tnum ${t.amount_paise > 0 ? "up" : loss ? "down" : ""}">${t.amount_paise > 0 ? "+" : "−"}${rupees(Math.abs(t.amount_paise))}</div>
         ${editBtn("txn", t.id, "Edit transaction")}</div>`;
     });
     return out;
@@ -1059,7 +1071,7 @@ async function viewMoney(main) {
 
   main.innerHTML = `
     <div class="stats">
-      <div class="stat"><span class="label">Earned</span><span class="value tnum up">${rupees(h.earned_this_month_paise)}</span><span class="delta">this month</span></div>
+      <div class="stat"><span class="label">Earned</span><span class="value tnum ${h.earned_this_month_paise < 0 ? "down" : "up"}">${h.earned_this_month_paise < 0 ? "−" : ""}${rupees(Math.abs(h.earned_this_month_paise))}</span><span class="delta">this month, after losses</span></div>
       <div class="stat"><span class="label">Spent</span><span class="value tnum">${rupees(h.spent_this_month_paise)}</span><span class="delta">this month</span></div>
       <div class="stat"><span class="label">Left over</span><span class="value tnum ${net >= 0 ? "up" : "down"}">${net >= 0 ? "" : "−"}${rupees(Math.abs(net))}</span><span class="delta">earned − spent</span></div>
       <div class="stat"><span class="label">Daily target</span><span class="value tnum">${rupees(h.target.daily_paise)}</span><span class="delta">to cover everything</span></div>
@@ -1075,7 +1087,7 @@ async function viewMoney(main) {
             <div class="bar"><span style="width:${pct(s.spend_paise, maxSpend)}%;background:${BUCKET[bk].color}" data-tip="${esc(s.category)}|${esc(rupees(s.spend_paise))} · ${s.count} payment${s.count === 1 ? "" : "s"}"></span></div></div>`;
         }).join("") : `<div class="empty">Add expenses to see your top categories</div>`}</div></section>
     </div>
-    <section class="card"><div class="card-head"><h2>Transactions</h2><div class="btn-row"><button class="btn small soft" id="add-inc">+ Income</button><button class="btn small" id="add-exp">+ Expense</button></div></div>
+    <section class="card"><div class="card-head"><h2>Transactions</h2><div class="btn-row"><button class="btn small soft" id="add-inc">+ Income</button><button class="btn small ghost" id="add-loss">+ Loss</button><button class="btn small" id="add-exp">+ Expense</button></div></div>
       <div class="list" id="tx">${txns.length ? txHtml(txns) : `<div class="empty">${tile(ICON.wallet)}No transactions yet. Tap + to add your first one.</div>`}</div>
       ${txns.length >= 30 ? `<button class="btn small ghost block" id="more" style="margin-top:10px">Load more</button>` : ""}</section>`;
 
@@ -1085,6 +1097,7 @@ async function viewMoney(main) {
   bindDel(main);
   $("#add-inc", main).addEventListener("click", () => quickAdd("income"));
   $("#add-exp", main).addEventListener("click", () => quickAdd("expense"));
+  $("#add-loss", main).addEventListener("click", () => quickAdd("loss"));
   $("#more", main)?.addEventListener("click", async (e) => {
     const more = await api.transactions(last);
     if (more.length) { loaded.push(...more); const frag = document.createElement("div"); frag.innerHTML = txHtml(more, last.txn_date); bindDel(frag); $("#tx", main).append(...frag.children); last = more[more.length - 1]; }
@@ -1145,7 +1158,7 @@ async function viewDues(main) {
   bindEdit(main, { loan: loans, card: cards, bill: bills, statement: dues.filter((d) => d.type === "card") });
   bindDebtPlan(main, loans, duesEst, duesHome?.freedom);
 
-  const nonIncome = cache.categories.filter((c) => !["income", "transfer"].includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
+  const nonIncome = cache.categories.filter((c) => !NOT_SPEND.includes(c.bucket)).map((c) => [c.id, `${c.name} (${BUCKET[c.bucket]?.label || c.bucket})`]);
   $("#add-bill", main).addEventListener("click", () => formSheet("Add a regular bill", [
     { name: "name", label: "Name", required: true, hint: "e.g. Electricity, School fees – Aarav, Netflix, Holiday fund" },
     [{ name: "amount", label: "Amount", type: "money", required: true },
