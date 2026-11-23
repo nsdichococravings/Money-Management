@@ -352,7 +352,7 @@ Money-Management/
 ├─ docs/                  # this design + EARNING-TARGET.md
 ├─ app/                   # PWA: login, Home, Money, Dues, Goals & investments, Ask AI, Settings
 ├─ supabase/
-│  ├─ migrations/         # ordered SQL migrations 0001-0010
+│  ├─ migrations/         # ordered SQL migrations 0001-0011
 │  ├─ functions/
 │  │  ├─ auth-login/      # password sign-in with lockout
 │  │  └─ ai-assistant/    # Ask AI chat + "Find savings" (Claude)

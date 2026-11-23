@@ -66,6 +66,18 @@ values (:'hid', :'bank', current_date, 2790000, fin.system_category('Salary'), '
        (:'hid', :'bank', current_date, -45000, fin.system_category('Groceries'), 'Swiggy Instamart');
 select pg_temp.check((fin.get_home(:'hid')->>'earned_this_week_paise')::bigint = 2790000, 'income counted this week');
 
+-- a loss comes off earned, and is not counted as spending
+insert into fin.transactions(household_id, account_id, txn_date, amount_paise, category_id, merchant)
+values (:'hid', :'bank', current_date, -300000, fin.system_category('Trading loss'), 'Intraday') returning id as loss \gset
+select pg_temp.check((fin.get_home(:'hid')->>'earned_this_week_paise')::bigint = 2490000
+  and (fin.get_home(:'hid')->>'spent_this_month_paise')::bigint = 45000, 'a loss lowers earned, not spent');
+update fin.transactions set amount_paise = -500000 where household_id = :'hid' and txn_date = current_date and id = :'loss';
+select pg_temp.check((fin.get_home(:'hid')->>'earned_this_week_paise')::bigint = 2290000, 'editing a loss updates earned');
+delete from fin.transactions where household_id = :'hid' and txn_date = current_date and id = :'loss';
+select pg_temp.check((fin.get_home(:'hid')->>'earned_this_week_paise')::bigint = 2790000
+  and not exists (select 1 from fin.monthly_category_spend where household_id = :'hid' and category_id = fin.system_category('Trading loss')),
+  'deleting a loss restores earned');
+
 -- paying: card payment is a transfer, so it is NOT counted as spending
 select fin.pay_card(:'stmt', :'bank') is not null as paid \gset
 select pg_temp.check((select status from fin.card_statements where id = :'stmt') = 'paid', 'card statement marked paid');
